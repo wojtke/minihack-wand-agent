@@ -1,0 +1,53 @@
+{
+  "checkpoint_sha256": "1786129a8754e9c5e3f4b183d17bd9885113936add08f9d703a3cf94b7b2a4fc",
+  "games_per_level": 20,
+  "seed_start": 210000000,
+  "bonus": 0,
+  "levels": {
+    "Easy": {
+      "games": 20,
+      "wins": 20,
+      "success_rate": 1.0,
+      "wilson_95": [
+        0.8388698745050667,
+        1.0
+      ],
+      "native_mean_return": 0.974,
+      "mean_steps": 3.9
+    },
+    "Medium": {
+      "games": 20,
+      "wins": 20,
+      "success_rate": 1.0,
+      "wilson_95": [
+        0.8388698745050667,
+        1.0
+      ],
+      "native_mean_return": 0.9790000000000003,
+      "mean_steps": 30.15
+    },
+    "Hard": {
+      "games": 20,
+      "wins": 12,
+      "success_rate": 0.6,
+      "wilson_95": [
+        0.3865779423152061,
+        0.7811960325858074
+      ],
+      "native_mean_return": 0.3850000000000017,
+      "mean_steps": 46.9
+    },
+    "Pro": {
+      "games": 20,
+      "wins": 0,
+      "success_rate": 0.0,
+      "wilson_95": [
+        0.0,
+        0.16113012549493322
+      ],
+      "native_mean_return": -0.5739999999999942,
+      "mean_steps": 1000.0
+    }
+  },
+  "purpose": "Small export sanity check; not a new headline performance estimate"
+}

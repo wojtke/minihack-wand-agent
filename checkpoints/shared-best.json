@@ -1,0 +1,62 @@
+{
+  "format": "NumPy arrays; allow_pickle=False",
+  "architecture": "463 -> 128 ReLU -> 128 ReLU -> 11",
+  "sha256": "1786129a8754e9c5e3f4b183d17bd9885113936add08f9d703a3cf94b7b2a4fc",
+  "original_checkpoint_sha256": "7d5b61b90454fa4586b709827f18b06465b5eaa39e4361693aa7bf6973f0f537",
+  "training_steps": 3670016,
+  "evaluation": {
+    "Easy": {
+      "games": 1000,
+      "wins": 1000,
+      "success_rate": 1.0,
+      "native_mean_return": 0.9755800000000001,
+      "item_rate": 1.0,
+      "mean_tiles": 1.0,
+      "wilson_95": [
+        0.996173241514445,
+        1.0
+      ]
+    },
+    "Medium": {
+      "games": 1000,
+      "wins": 998,
+      "success_rate": 0.998,
+      "native_mean_return": 0.9774600000000002,
+      "item_rate": 1.0,
+      "mean_tiles": 25.987,
+      "wilson_95": [
+        0.9927371921365079,
+        0.9994513564118793
+      ]
+    },
+    "Hard": {
+      "games": 1000,
+      "wins": 803,
+      "success_rate": 0.803,
+      "native_mean_return": 0.7127200000000004,
+      "item_rate": 1.0,
+      "mean_tiles": 24.542,
+      "wilson_95": [
+        0.7772091460935389,
+        0.8264718382642149
+      ]
+    },
+    "Pro": {
+      "games": 1000,
+      "wins": 0,
+      "success_rate": 0.0,
+      "native_mean_return": -0.390889999999998,
+      "item_rate": 1.0,
+      "mean_tiles": 70.34,
+      "wilson_95": [
+        2.168404344971009e-19,
+        0.0038267584855551234
+      ]
+    }
+  },
+  "limitations": [
+    "Pro unsolved",
+    "Fixed terrain per difficulty; no unseen-map evaluation",
+    "Minimal starter does not reproduce the checkpoint training lineage"
+  ]
+}

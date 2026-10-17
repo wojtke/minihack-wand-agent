@@ -1,0 +1,17 @@
+{
+  "steps": 1000000,
+  "seed": 42,
+  "learning_rate": 0.0003,
+  "gamma": 0.99,
+  "batch_size": 128,
+  "buffer_size": 100000,
+  "learning_starts": 5000,
+  "train_every": 4,
+  "target_every": 2000,
+  "epsilon_start": 1.0,
+  "epsilon_end": 0.1,
+  "epsilon_fraction": 0.5,
+  "visit_bonus": 0.01,
+  "bonus_cap": 2.0,
+  "save_every": 50000
+}

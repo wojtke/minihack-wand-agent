@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minihack-wand-agent"
+version = "0.1.0"
+description = "One agent for the four MiniHack Wand of Death tasks"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "numpy==1.26.4", "gymnasium==1.0.0", "nle==1.1.0",
+  "minihack @ git+https://github.com/facebookresearch/minihack.git@09eaa7ee45c567850668d3743d7fe1853917d98f",
+  "torch==2.6.0", "pillow==12.3.0", "setuptools<81",
+]
+
+[tool.setuptools]
+packages = ["wand_agent"]
