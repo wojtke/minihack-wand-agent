@@ -1,0 +1,3 @@
+# Keep upstream level padding and license copies verbatim.
+browser/levels/*.des -whitespace
+licenses/*.txt -whitespace

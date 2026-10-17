@@ -4,9 +4,9 @@ One shared agent for the Easy, Medium, Hard and Pro tasks, plus a short interact
 
 **[Open the presentation](https://wojtke.github.io/minihack-wand-agent/)** · **[Download the PDF](https://wojtke.github.io/minihack-wand-agent/assets/wand-of-death.pdf)**
 
-GitHub Pages serves the slides, gameplay recordings and PDF. To play the actual MiniHack game, run the local server below.
+**[Play all four levels in your browser](https://wojtke.github.io/minihack-wand-agent/#3)** — no installation or local server. The original NLE engine runs as WebAssembly, with the MiniHack task rules. GitHub Pages hosts the slides, game files, recordings and PDF.
 
-## Setup
+## Setup for training
 
 Python 3.11 and [uv](https://docs.astral.sh/uv/getting-started/installation/) are required. MiniHack/NLE compile native code.
 
@@ -39,13 +39,17 @@ Tested on Apple Silicon macOS. Linux/WSL instructions are provided but have not 
 
 ## Play and watch
 
+Play on the website above. On slide 3, click the board: **WASD + Q/E/Z/C** move/aim; **P** picks up; **R** uses a wand; **F** selects/fires; **Space** restarts the same seed. Hints are optional.
+
+To serve the same website locally, only a static HTTP server is needed (no project dependencies):
+
 ```sh
-python -m wand_agent.serve --open
+python3 -m http.server 8000 --directory docs
 ```
 
-Opens **http://127.0.0.1:8768** with real playable games on slide 3. Click the board: **WASD + Q/E/Z/C** move/aim; **P** picks up; **R** uses a wand; **F** selects/fires; **Space** restarts the same seed. Hints are optional. Stop the server with Ctrl+C. Use `--port 8769` if the port is busy.
+Open **http://localhost:8000/#3**. The game still executes in the browser. Engine source, build instructions and native parity checks are in [browser/README.md](browser/README.md).
 
-Watch the included agent in the terminal:
+After the training setup, watch the included agent in the native terminal environment:
 
 ```sh
 python -m wand_agent.play --level Hard --seed 0
@@ -90,6 +94,6 @@ These are the original checkpoint's recorded evaluation results. All levels use 
 python -m unittest discover -s tests -v
 ```
 
-`wand_agent/` contains the environment wrapper, observation encoder, trainer, evaluator and local server. `docs/` is the static website published by GitHub Pages; edit its HTML/CSS/JS directly. The PDF uses print CSS: start the server, open the site and choose **Print → Save as PDF** (landscape, background graphics, no browser headers/footers).
+`wand_agent/` contains the native environment wrapper, observation encoder, trainer, evaluator and reference server. `browser/` contains the WebAssembly build and parity checks. `docs/` is the static website published by GitHub Pages. The PDF uses print CSS: open the site and choose **Print → Save as PDF** (landscape, background graphics, no browser headers/footers).
 
-Project code and weights use the MIT license. Game artwork and upstream components retain their own licenses; see [THIRD_PARTY.md](THIRD_PARTY.md). This project is not affiliated with the MiniHack or NetHack authors.
+Original agent/presentation code and weights use the MIT license. The NLE engine and its port use the NetHack General Public License; artwork and other upstream components retain their own licenses. See [THIRD_PARTY.md](THIRD_PARTY.md). This project is not affiliated with the MiniHack or NetHack authors.

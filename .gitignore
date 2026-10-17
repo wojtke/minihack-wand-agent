@@ -6,3 +6,5 @@ runs/
 .DS_Store
 node_modules/
 tmp/
+
+.build/

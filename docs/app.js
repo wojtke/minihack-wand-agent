@@ -5,18 +5,13 @@ const playIndex=slides.findIndex(slide=>slide.classList.contains('play-slide'));
 const demoKeys={w:'k',a:'h',s:'j',d:'l',q:'y',e:'u',z:'b',c:'n',p:',',r:'z',f:'f',ArrowUp:'k',ArrowDown:'j',ArrowLeft:'h',ArrowRight:'l'};
 const dialog=$('#details-dialog');
 let current=0,publicObservation=null,backend=false,game=null,busy=false;
-let previousSession=null;
-try{previousSession=sessionStorage.getItem('wand-game-session');}catch{}
-window.addEventListener('pagehide',event=>{
-  if(event.persisted)return; // Back/forward cache keeps the page and game alive.
-  const session=game?.session||previousSession;
-  if(session&&backend)navigator.sendBeacon('api/close',new Blob([JSON.stringify({session})],{type:'application/json'}));
-});
+let browserGame=null;
+window.addEventListener('pagehide',event=>{if(!event.persisted)browserGame?.close();});
 const sources=[
   ['MiniHack task documentation','https://minihack.readthedocs.io/en/stable/envs/skills/wod.html'],
   ['Level definitions used in this demo','https://github.com/facebookresearch/minihack/blob/09eaa7ee45c567850668d3743d7fe1853917d98f/minihack/envs/skills_wod.py'],
   ['MiniHack task rewards','https://github.com/facebookresearch/minihack/blob/09eaa7ee45c567850668d3743d7fe1853917d98f/minihack/base.py'],
-  ['Game-time penalty in NLE 1.1.0','https://github.com/facebookresearch/nle/blob/v1.1.0/nle/env/tasks.py']
+  ['Game-time penalty in NLE 1.1.0','https://github.com/NetHack-LE/nle/blob/v1.1.0/nle/env/tasks.py']
 ];
 const goals={Easy:'Success: kill the minotaur.',Medium:'Success: reach the staircase beyond the minotaur.',Hard:'Success: reach the staircase beyond the minotaur.',Pro:'Success: reach the staircase.'};
 
@@ -89,25 +84,25 @@ $('#notes-button').addEventListener('click',()=>{
 $('#offline-replay').addEventListener('click',()=>showSlide(0));
 $('#local-instructions').addEventListener('click',()=>{
   const div=document.createElement('div');
-  div.append(paragraph('Install the project, then run: python -m wand_agent.serve --open'));
-  div.append(paragraph('This starts the actual MiniHack game on your computer. GitHub Pages hosts the slides, recordings and PDF. Setup instructions cover macOS and Linux; on Windows use WSL2.'));
-  const link=document.createElement('a');link.href='https://github.com/wojtke/minihack-wand-agent#setup';link.target='_blank';link.rel='noopener';link.textContent='Setup instructions on GitHub';div.append(link);
-  modal('Run the game locally',div);
+  div.append(paragraph('Play in a current browser with WebAssembly support. No installation or game server is needed.'));
+  div.append(paragraph('The repository also includes a native Python environment for training and watching the agent in a terminal. Setup instructions cover macOS and Linux; on Windows use WSL2.'));
+  const link=document.createElement('a');link.href='https://github.com/wojtke/minihack-wand-agent#setup-for-training';link.target='_blank';link.rel='noopener';link.textContent='Setup instructions on GitHub';div.append(link);
+  modal('Browser and Python versions',div);
 });
 dialog.addEventListener('close',()=>dialog.querySelectorAll('video').forEach(v=>v.pause()));
 
 function setBusy(value){busy=value;document.body.classList.toggle('game-busy',value);$('#new-game').disabled=value||!backend;$('#restart-game').disabled=value||!backend||!game;$('#game-level').disabled=value||!backend;}
-async function api(path,data){const response=await fetch(`api/${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),signal:AbortSignal.timeout(15000)});const result=await response.json();if(!response.ok)throw new Error(result.error||'Could not connect to the game.');return result;}
+async function api(path,data){return browserGame.request(path,data);}
 async function startGame(seed){
   if(!backend||busy)return;
-  setBusy(true);$('#game-state').textContent='Starting game…';
-  try{game=await api('reset',{level:$('#game-level').value,seed,session:game?.session||previousSession});previousSession=game.session;try{sessionStorage.setItem('wand-game-session',game.session);}catch{}renderGame();$('#game-board').focus({preventScroll:true});}
-  catch(e){$('#game-message').textContent=e.message;$('#game-state').textContent='Could not start the game';}
+  setBusy(true);$('#game-state').textContent='Loading game…';
+  try{game=await api('reset',{level:$('#game-level').value,seed});renderGame();$('#game-board').focus({preventScroll:true});}
+  catch(e){game=null;$('#game-message').textContent=e.message;$('#game-state').textContent='Could not start the game';}
   finally{setBusy(false);}
 }
 async function sendAction(key){
   if(!backend||busy||!game||game.done)return;
-  setBusy(true);try{game=await api('step',{session:game.session,key});renderGame();}catch(e){$('#game-message').textContent=e.message;}finally{setBusy(false);}
+  setBusy(true);try{game=await api('step',{key});renderGame();}catch(e){$('#game-message').textContent=e.message;}finally{setBusy(false);}
 }
 function renderGame(){
   $('#game-placeholder').hidden=true;$('#game-image').hidden=false;$('#game-image').src=game.image;
@@ -152,7 +147,10 @@ document.querySelectorAll('[data-key]').forEach(b=>b.addEventListener('click',()
 $('#game-board').addEventListener('focus',()=>{$('#focus-help').textContent='Keyboard controls active · Esc returns to slide navigation.';});
 $('#game-board').addEventListener('blur',()=>{$('#focus-help').textContent='Click the board to use the keyboard. Esc returns to the slides.';});
 async function connect(){
-  try{const response=await fetch('api/health',{signal:AbortSignal.timeout(2500)});backend=response.ok&&(await response.json()).ready===true;}catch{backend=false;}
+  try{
+    if(!window.WebAssembly||!window.Worker||!window.OffscreenCanvas)throw new Error('Browser support missing');
+    const {BrowserGame}=await import('./engine/client.mjs');browserGame=new BrowserGame();backend=true;
+  }catch{backend=false;}
   $('#offline-note').hidden=backend;slides[playIndex].classList.toggle('offline',!backend);setBusy(false);
   if(backend){$('#game-state').textContent='MiniHack ready';if(current===playIndex&&!game)startGame(0);}
 }
