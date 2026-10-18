@@ -35,7 +35,6 @@ function showSlide(index,updateHash=true){
 }
 $('#prev').addEventListener('click',()=>showSlide(current-1));$('#next').addEventListener('click',()=>showSlide(current+1));
 window.addEventListener('hashchange',()=>showSlide((Number(location.hash.slice(1))||1)-1,false));
-$('#print').addEventListener('click',()=>window.print());
 $('#fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch{}});
 document.addEventListener('fullscreenchange',()=>{$('#fullscreen').firstChild.textContent=document.fullscreenElement?'Exit full screen':'Full screen';});
 document.addEventListener('keydown',e=>{
@@ -78,7 +77,7 @@ $('#notes-button').addEventListener('click',()=>{
   const heading=document.createElement('h3');heading.textContent='Sources';div.append(heading);
   const list=document.createElement('ul');for(const [title,url] of sources){const li=document.createElement('li'),a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';a.textContent=title;li.append(a);list.append(li);}div.append(list);
   div.append(paragraph('Demo versions: MiniHack 1.0.0+09eaa7e and NLE 1.1.0, Restricted variant. Videos are recordings of real local episodes. Presentation code and materials were prepared with AI assistance; see the repository for source credits and recording details.'));
-  const credits=document.createElement('a');credits.href='https://github.com/wojtke/minihack-wand-agent/blob/main/THIRD_PARTY.md';credits.target='_blank';credits.rel='noopener';credits.textContent='Project source and artwork credits';div.append(credits);
+  const credits=document.createElement('a');credits.href='https://github.com/wojtke/minihack-wand-agent/blob/main/README.md#sources-and-licenses';credits.target='_blank';credits.rel='noopener';credits.textContent='Project source and artwork credits';div.append(credits);
   modal(`Slide ${current+1} · notes`,div);
 });
 $('#offline-replay').addEventListener('click',()=>showSlide(0));

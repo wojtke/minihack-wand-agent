@@ -1,6 +1,6 @@
 // NLE-derived port, 2026-10-17. NetHack General Public License; see licenses/NetHack.txt.
 // MiniHack 09eaa7e / NLE 1.1.0 task wrapper around the original wasm engine.
-// Ported from minihack/base.py and nle/env/{base,tasks}.py; see browser/README.md.
+// Ported from minihack/base.py and nle/env/{base,tasks}.py; see README.md, Sources and licenses.
 export const KEYS='kljhunby,zf';
 export function readRaw(m) {
   const array=(field,heap,length)=>{const pointer=m._wand_pointer(field)/heap.BYTES_PER_ELEMENT;return Array.from(heap.subarray(pointer,pointer+length));};

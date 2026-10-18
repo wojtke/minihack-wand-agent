@@ -23,4 +23,4 @@ SOFTWARE.
 This license covers original agent/presentation code, text and model weights.
 The NLE engine, browser C port and NLE-derived runtime wrapper are covered by
 the NetHack General Public License, not this license. Upstream game artwork
-and dependencies retain their original licenses; see THIRD_PARTY.md.
+and dependencies retain their original licenses; see README.md (Sources and licenses).

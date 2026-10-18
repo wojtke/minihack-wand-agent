@@ -6,9 +6,9 @@ from PIL import Image
 import minihack
 from minihack.tiles import GlyphMapper, glyph2tile
 
-ROOT=Path(__file__).resolve().parents[1]
+ROOT=Path(__file__).resolve().parents[2]
 p=argparse.ArgumentParser();p.add_argument('--node',required=True);p.add_argument('--build',type=Path,default=ROOT/'.build/wasm');a=p.parse_args()
-output=ROOT/'docs/engine';output.mkdir(exist_ok=True)
+output=ROOT/'.build/engine';output.mkdir(exist_ok=True)
 work=ROOT/'.build/levels';work.mkdir(exist_ok=True)
 # dgn_file.h structures contain fixed-width shorts/ints. Only the five-word
 # version_info header changes from LP64 to wasm32. Replace it with the header
@@ -21,10 +21,10 @@ for name in ['easy','medium','hard','pro']:
  folder=work/name;folder.mkdir(exist_ok=True)
  (folder/'dungeon').write_bytes(wasm_header+dungeon[40:])
  shutil.copy2(a.build/'dat/quest.dat',folder/'quest.dat')
- subprocess.run([a.node,str(a.build/'util/lev_comp.js'),str(ROOT/'browser/levels'/f'{name}.des')],cwd=folder,check=True)
+ subprocess.run([a.node,str(a.build/'util/lev_comp.js'),str(ROOT/'website/browser/levels'/f'{name}.des')],cwd=folder,check=True)
  subprocess.run([a.node,str(a.build/'util/dlb.js'),'cf','nhdat','dungeon','quest.dat','mylevel.lev'],cwd=folder,check=True)
  shutil.copy2(folder/'nhdat',output/f'{name}.nhdat')
-shutil.copy2(ROOT/'browser/levels/metadata.json',output/'levels.json')
+shutil.copy2(ROOT/'website/browser/levels/metadata.json',output/'levels.json')
 tile_map=GlyphMapper().tiles
 tiles=np.asarray([tile_map[i] for i in range(max(tile_map)+1)],dtype=np.uint8)
 atlas=np.zeros((math.ceil(len(tiles)/32)*16,512,3),np.uint8)

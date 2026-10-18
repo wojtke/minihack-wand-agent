@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 const engines = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const url = process.env.PRESENTATION_URL || 'http://localhost:8000/';
 const selected = (process.env.BROWSERS || 'chromium,firefox,webkit').split(',');
 const cases = JSON.parse(fs.readFileSync(path.join(root, '.build/native-traces.json')))
