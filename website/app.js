@@ -58,11 +58,13 @@ mediaDialog.addEventListener('close',()=>{
   $('#media-content').replaceChildren();document.body.classList.remove('media-open');
   mediaSession=null;session.opener?.focus({preventScroll:true});
 });
-document.querySelectorAll('.level-image, .observation-window, .reward-comparison figure').forEach(figure=>{
-  const image=figure.querySelector('img'),caption=figure.querySelector('figcaption');
-  const open=()=>openMedia(image,image.alt);
-  image.classList.add('enlargeable');image.addEventListener('click',open);
-  caption.append(enlargeButton(`Enlarge: ${image.alt}`,open));
+document.querySelectorAll('.level-image img, .observation-window img, .reward-comparison img, .recording video').forEach(media=>{
+  const title=media.alt||media.getAttribute('aria-label');
+  const button=document.createElement('button');
+  button.type='button';button.className='media-preview';button.title='Enlarge';
+  button.setAttribute('aria-label',`Enlarge: ${title}`);button.setAttribute('aria-haspopup','dialog');
+  media.before(button);button.append(media);
+  button.addEventListener('click',()=>{button.focus({preventScroll:true});openMedia(media,title);});
 });
 const enlargeGame=enlargeButton('Enlarge interactive game',()=>openMedia($('.game-layout'),'Interactive demonstration',true));
 enlargeGame.id='enlarge-game';enlargeGame.textContent='Enlarge game';enlargeGame.disabled=true;
@@ -103,17 +105,6 @@ document.addEventListener('keydown',e=>{
   if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();showSlide(current-1);}
   if(e.key==='Home'){e.preventDefault();showSlide(0);}
   if(e.key==='End'){e.preventDefault();showSlide(slides.length-1);}
-});
-
-document.querySelectorAll('.video-toggle').forEach(button=>{
-  const video=document.getElementById(button.dataset.video);
-  function sync(){button.textContent=video.paused?'Play':'Pause';button.setAttribute('aria-label',(video.paused?'Play ':'Pause ')+video.id.replace('video-','')+' recording');button.setAttribute('aria-pressed',String(!video.paused));}
-  function toggle(){if(video.paused){video.dataset.userPaused='false';video.play().catch(()=>{});}else{video.dataset.userPaused='true';video.pause();}}
-  const title=video.getAttribute('aria-label');
-  const actions=document.createElement('span');actions.className='media-actions';button.before(actions);
-  actions.append(button,enlargeButton(`Enlarge ${title}`,()=>openMedia(video,title)));
-  button.addEventListener('click',toggle);video.addEventListener('click',()=>{if(!mediaDialog.open)openMedia(video,title);});
-  video.addEventListener('play',sync);video.addEventListener('pause',sync);sync();
 });
 
 fetch('assets/public-observation.json').then(r=>r.json()).then(data=>{publicObservation=data;}).catch(()=>{});
