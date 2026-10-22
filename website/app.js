@@ -4,6 +4,7 @@ const slides=[...document.querySelectorAll('.slide')];
 const playIndex=slides.findIndex(slide=>slide.classList.contains('play-slide'));
 const demoKeys={w:'k',a:'h',s:'j',d:'l',q:'y',e:'u',z:'b',c:'n',p:',',r:'z',f:'f',ArrowUp:'k',ArrowDown:'j',ArrowLeft:'h',ArrowRight:'l'};
 const dialog=$('#details-dialog');
+const mediaDialog=$('#media-dialog');
 let current=0,publicObservation=null,backend=false,game=null,busy=false;
 let browserGame=null;
 window.addEventListener('pagehide',event=>{if(!event.persisted)browserGame?.close();});
@@ -21,8 +22,55 @@ function closeDialog(){dialog.close();}
 $('.dialog-close').addEventListener('click',closeDialog);
 dialog.addEventListener('click',e=>{if(e.target===dialog&&e.clientX>=0){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeDialog();}});
 
+// Move live media into the dialog so playback and the game keep their state.
+let mediaSession=null;
+function enlargeButton(label,open){
+  const button=document.createElement('button');
+  button.type='button';button.className='media-enlarge';button.textContent='Enlarge';
+  button.setAttribute('aria-label',label);button.setAttribute('aria-haspopup','dialog');
+  button.addEventListener('click',()=>{button.focus({preventScroll:true});open();});return button;
+}
+function openMedia(node,title,isGame=false){
+  if(mediaDialog.open)return;
+  const playing=[...document.querySelectorAll('.slide video')].filter(video=>!video.paused);
+  const moved=isGame?[$('.game-toolbar'),node]:node.tagName==='VIDEO'?[node]:[];
+  mediaSession={opener:document.activeElement,playing,video:node.tagName==='VIDEO'?node:null,
+    controls:node.controls,moved:moved.map(element=>({element,parent:element.parentNode,next:element.nextSibling}))};
+  playing.forEach(video=>video.pause());
+  $('#media-title').textContent=title;mediaDialog.classList.toggle('game-media',isGame);
+  $('#media-content').replaceChildren(...(moved.length?moved:[node.cloneNode(true)]));
+  if(mediaSession.video)node.controls=true;
+  document.body.classList.add('media-open');mediaDialog.showModal();
+  if(mediaSession.video&&playing.includes(node))node.play().catch(()=>{});
+  if(isGame)$('#game-board').focus({preventScroll:true});
+}
+$('#close-media').addEventListener('click',()=>mediaDialog.close());
+mediaDialog.addEventListener('close',()=>{
+  const session=mediaSession;if(!session)return;
+  const wasPlaying=session.video&&!session.video.paused;
+  session.moved.forEach(({element,parent,next})=>parent.insertBefore(element,next));
+  if(session.video){
+    session.video.controls=session.controls;session.video.dataset.userPaused=String(!wasPlaying);
+    if(wasPlaying&&session.video.closest('.slide')?.classList.contains('active'))session.video.play().catch(()=>{});
+  }
+  session.playing.filter(video=>video!==session.video&&video.closest('.slide')?.classList.contains('active'))
+    .forEach(video=>video.play().catch(()=>{}));
+  $('#media-content').replaceChildren();document.body.classList.remove('media-open');
+  mediaSession=null;session.opener?.focus({preventScroll:true});
+});
+document.querySelectorAll('.level-image, .observation-window, .reward-comparison figure').forEach(figure=>{
+  const image=figure.querySelector('img'),caption=figure.querySelector('figcaption');
+  const open=()=>openMedia(image,image.alt);
+  image.classList.add('enlargeable');image.addEventListener('click',open);
+  caption.append(enlargeButton(`Enlarge: ${image.alt}`,open));
+});
+const enlargeGame=enlargeButton('Enlarge interactive game',()=>openMedia($('.game-layout'),'Interactive demonstration',true));
+enlargeGame.id='enlarge-game';enlargeGame.textContent='Enlarge game';enlargeGame.disabled=true;
+$('#show-observation').before(enlargeGame);
+
 slides.forEach((slide,i)=>{const button=document.createElement('button');button.setAttribute('aria-label',`Slide ${i+1}: ${slide.dataset.title}`);button.addEventListener('click',()=>showSlide(i));$('#slide-dots').append(button);});
 function showSlide(index,updateHash=true){
+  if(mediaDialog.open)mediaDialog.close();
   current=Math.max(0,Math.min(slides.length-1,index));
   slides.forEach((slide,i)=>{slide.hidden=i!==current;slide.classList.toggle('active',i===current);if(i!==current)slide.querySelectorAll('video').forEach(v=>v.pause());});
   [...$('#slide-dots').children].forEach((b,i)=>{b.classList.toggle('current',i===current);b.setAttribute('aria-current',i===current?'step':'false');});
@@ -39,6 +87,7 @@ $('#fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenEl
 document.addEventListener('fullscreenchange',()=>{$('#fullscreen').firstChild.textContent=document.fullscreenElement?'Exit full screen':'Full screen';});
 document.addEventListener('keydown',e=>{
   if(dialog.open)return;
+  if(mediaDialog.open&&(!mediaDialog.classList.contains('game-media')||e.key==='Escape'))return;
   const target=e.target;
   if(['SELECT','INPUT','TEXTAREA'].includes(target.tagName))return;
   if(current===playIndex&&$('#game-board').contains(document.activeElement)){
@@ -49,6 +98,7 @@ document.addEventListener('keydown',e=>{
     if(key){e.preventDefault();sendAction(key);}
     return;
   }
+  if(mediaDialog.open)return;
   if(e.key==='ArrowRight'||e.key==='PageDown'){e.preventDefault();showSlide(current+1);}
   if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();showSlide(current-1);}
   if(e.key==='Home'){e.preventDefault();showSlide(0);}
@@ -59,7 +109,10 @@ document.querySelectorAll('.video-toggle').forEach(button=>{
   const video=document.getElementById(button.dataset.video);
   function sync(){button.textContent=video.paused?'Play':'Pause';button.setAttribute('aria-label',(video.paused?'Play ':'Pause ')+video.id.replace('video-','')+' recording');button.setAttribute('aria-pressed',String(!video.paused));}
   function toggle(){if(video.paused){video.dataset.userPaused='false';video.play().catch(()=>{});}else{video.dataset.userPaused='true';video.pause();}}
-  button.addEventListener('click',toggle);video.addEventListener('click',toggle);
+  const title=video.getAttribute('aria-label');
+  const actions=document.createElement('span');actions.className='media-actions';button.before(actions);
+  actions.append(button,enlargeButton(`Enlarge ${title}`,()=>openMedia(video,title)));
+  button.addEventListener('click',toggle);video.addEventListener('click',()=>{if(!mediaDialog.open)openMedia(video,title);});
   video.addEventListener('play',sync);video.addEventListener('pause',sync);sync();
 });
 
@@ -90,7 +143,7 @@ $('#local-instructions').addEventListener('click',()=>{
 });
 dialog.addEventListener('close',()=>dialog.querySelectorAll('video').forEach(v=>v.pause()));
 
-function setBusy(value){busy=value;document.body.classList.toggle('game-busy',value);$('#new-game').disabled=value||!backend;$('#restart-game').disabled=value||!backend||!game;$('#game-level').disabled=value||!backend;}
+function setBusy(value){busy=value;document.body.classList.toggle('game-busy',value);$('#new-game').disabled=value||!backend;$('#restart-game').disabled=value||!backend||!game;$('#game-level').disabled=value||!backend;enlargeGame.disabled=value||!backend||!game;}
 async function api(path,data){return browserGame.request(path,data);}
 async function startGame(seed){
   if(!backend||busy)return;
@@ -143,7 +196,7 @@ $('#restart-game').addEventListener('click',restartGame);
 $('#new-game').addEventListener('click',()=>startGame(game?.level===$('#game-level').value?game.seed+1:0));
 $('#game-level').addEventListener('change',()=>startGame(0));
 document.querySelectorAll('[data-key]').forEach(b=>b.addEventListener('click',()=>{$('#game-board').focus({preventScroll:true});sendAction(b.dataset.key);}));
-$('#game-board').addEventListener('focus',()=>{$('#focus-help').textContent='Keyboard controls active · Esc returns to slide navigation.';});
+$('#game-board').addEventListener('focus',()=>{$('#focus-help').textContent=mediaDialog.open?'Keyboard controls active · Esc closes the enlarged view.':'Keyboard controls active · Esc returns to slide navigation.';});
 $('#game-board').addEventListener('blur',()=>{$('#focus-help').textContent='Click the board to use the keyboard. Esc returns to the slides.';});
 async function connect(){
   try{

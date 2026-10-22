@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="MiniHack Wand of Death: environment, objectives, levels, actions, observations and rewards. Includes recorded gameplay and a playable browser demo.">
   <title>MiniHack: Wand of Death</title>
-  <link rel="icon" type="image/png" sizes="16x16" href="assets/icon-wand.png"><link rel="stylesheet" href="style.css">
+  <link rel="icon" type="image/png" sizes="16x16" href="assets/icon-wand.png"><link rel="stylesheet" href="style.css?v=enlarge-media">
 </head>
 <body>
   <header class="topbar"><a class="brand" href="#1">MiniHack: Wand of Death</a><div class="view-tools"><button id="fullscreen" class="quiet">Full screen</button></div></header>
@@ -53,6 +53,7 @@
   </main>
   <footer class="bottom-bar"><button id="notes-button" class="quiet">Notes &amp; sources</button><nav aria-label="Slide navigation"><button id="prev" class="nav-arrow" aria-label="Previous slide">←</button><div id="slide-dots" hidden></div><span id="slide-count">01 / 03</span><button id="next" class="nav-arrow" aria-label="Next slide">→</button></nav></footer>
   <dialog id="details-dialog"><button class="dialog-close" aria-label="Close">×</button><h2 id="dialog-title"></h2><div id="dialog-content"></div></dialog>
-  <script src="app.js?v=layout-2" defer></script>
+  <dialog id="media-dialog" aria-labelledby="media-title"><header class="media-header"><h2 id="media-title"></h2><button id="close-media" autofocus>Close ×</button></header><div id="media-content"></div></dialog>
+  <script src="app.js?v=enlarge-media" defer></script>
 </body>
 </html>
