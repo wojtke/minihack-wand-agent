@@ -1,0 +1,66 @@
+{
+  "purpose": "Presentation illustration of a uniformly random Restricted-action agent; not an evaluation",
+  "seed_rule": "seed = 950000000 + 10000 * level index, fixed before recording",
+  "recordings": [
+    {
+      "level": "Easy",
+      "seed": 950000000,
+      "horizon": 50,
+      "actions_shown": 50,
+      "outcome": "ABORTED",
+      "native_return": -0.43,
+      "fps": 4,
+      "file": "random-easy.mp4",
+      "last_messages": [
+        "What do you want to zap? [f or ?*] ",
+        "What do you want to zap? [f or ?*] ",
+        "What do you want to zap? [f or ?*] "
+      ]
+    },
+    {
+      "level": "Medium",
+      "seed": 950010000,
+      "horizon": 150,
+      "actions_shown": 111,
+      "outcome": "DEATH",
+      "native_return": -0.93,
+      "fps": 10,
+      "file": "random-medium.mp4",
+      "last_messages": [
+        "What do you want to zap? [f or ?*] ",
+        "What do you want to zap? [f or ?*] ",
+        "In what direction? "
+      ]
+    },
+    {
+      "level": "Hard",
+      "seed": 950020000,
+      "horizon": 400,
+      "actions_shown": 32,
+      "outcome": "DEATH",
+      "native_return": -0.11,
+      "fps": 5,
+      "file": "random-hard.mp4",
+      "last_messages": [
+        "It's a wall.",
+        "In what direction? ",
+        "What a strange direction!"
+      ]
+    },
+    {
+      "level": "Pro",
+      "seed": 950030000,
+      "horizon": 1000,
+      "actions_shown": 150,
+      "outcome": "EXCERPT",
+      "native_return": -1.15,
+      "fps": 10,
+      "file": "random-pro.mp4",
+      "last_messages": [
+        "It's a wall.",
+        "It's a wall.",
+        "It's a wall."
+      ]
+    }
+  ]
+}

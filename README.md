@@ -59,7 +59,7 @@ Use a separate run directory per method/config/seed and retain the git revision 
 | Hard | 803 | 910020000–910020999 |
 | Pro | 0 | 910030000–910030999 |
 
-[Checkpoint metadata](experiments/checkpoints/shared-best.json) records hashes and historical results. A separate [20-game-per-level export check](experiments/checkpoints/export-validation.json), starting at seed 210000000, gave 20/20/12/0 wins; original/exported inference matched over 5,332 transitions. **Pro remains unsolved.** The Easy/Medium/Hard videos show complete wins; Pro shows only the first 60 actions. Recordings are accelerated/cropped. Full-map illustrations are presentation-only and are not given to the policy or player.
+[Checkpoint metadata](experiments/checkpoints/shared-best.json) records hashes and historical results. A separate [20-game-per-level export check](experiments/checkpoints/export-validation.json), starting at seed 210000000, gave 20/20/12/0 wins; original/exported inference matched over 5,332 transitions. **Pro remains unsolved.** The Easy/Medium/Hard videos show complete wins; Pro shows only the first 60 actions. Recordings are accelerated/cropped. The random-agent clips on slide 3 come from [experiments/tools/record_random.py](experiments/tools/record_random.py) (uniform over the 11 inputs, seeds fixed in advance); seeds and outcomes are in [website/assets/random-recordings.json](website/assets/random-recordings.json). Full-map illustrations are presentation-only and are not given to the policy or player.
 
 ## Website and browser engine
 

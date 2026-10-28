@@ -80,7 +80,7 @@ function showSlide(index,updateHash=true){
   $('#prev').disabled=current===0;$('#next').disabled=current===slides.length-1;
   if(updateHash)history.replaceState(null,'',`#${current+1}`);
   window.scrollTo({top:0,behavior:'instant'});
-  if(current===0&&!matchMedia('(prefers-reduced-motion: reduce)').matches)slides[0].querySelectorAll('video').forEach(v=>{if(v.dataset.userPaused!=='true')v.play().catch(()=>{});});
+  if(slides[current].hasAttribute('data-autoplay')&&!matchMedia('(prefers-reduced-motion: reduce)').matches)slides[current].querySelectorAll('video').forEach(v=>{if(v.dataset.userPaused!=='true')v.play().catch(()=>{});});
   if(current===playIndex&&backend&&!game&&!busy)startGame(0);
 }
 $('#prev').addEventListener('click',()=>showSlide(current-1));$('#next').addEventListener('click',()=>showSlide(current+1));
@@ -148,7 +148,7 @@ async function sendAction(key){
   setBusy(true);try{game=await api('step',{key});renderGame();}catch(e){$('#game-message').textContent=e.message;}finally{setBusy(false);}
 }
 function renderGame(){
-  $('#game-placeholder').hidden=true;$('#game-image').hidden=false;$('#game-image').src=game.image;
+  $('#game-placeholder').hidden=true;$('#game-image').hidden=false;showView();
   const labels={RUNNING:'playing',TASK_SUCCESSFUL:'success',DEATH:'death',ABORTED:'action limit'};
   $('#game-state').textContent=`${game.level} · ${labels[game.status]||game.status} · HP ${game.hp}/${game.hp_max}`;
   $('#game-counters').textContent=`${game.steps}/${game.horizon} actions · return ${game.total.toFixed(2)}`;
@@ -182,6 +182,8 @@ function updateHints(){
   else box.textContent='Pick up with P. Use a wand: R → F → direction. '+goals[game.level];
 }
 $('#hints').addEventListener('change',updateHints);
+function showView(){const agent=$('#agent-view').checked;$('#agent-legend').hidden=!agent;if(game)$('#game-image').src=agent&&game.agent_image?game.agent_image:game.image;}
+$('#agent-view').addEventListener('change',showView);showView();
 function restartGame(){if(game&&!busy)startGame(game.seed);}
 $('#restart-game').addEventListener('click',restartGame);
 $('#new-game').addEventListener('click',()=>startGame(game?.level===$('#game-level').value?game.seed+1:0));
