@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MiniHack: Wand of Death – Presentation 1</title>
+<style>
+@page{size:1280px 720px;margin:0}
+:root{font-family:Arial,Helvetica,sans-serif;color:#202124;--muted:#5c6168;--line:#d9dcdf;--accent:#315b78;--soft:#f4f6f8}
+*{box-sizing:border-box}
+html,body{margin:0;background:#fff}
+h1,h2,h3,h4,p,figure,dl,dd,ul,ol{margin:0}
+b,strong{font-weight:600}
+a{color:var(--accent)}
+img{image-rendering:pixelated;display:block}
+.slide{width:1280px;height:720px;padding:44px 56px 48px;position:relative;overflow:hidden;page-break-after:always;break-after:page;display:flex;flex-direction:column}
+.slide:last-child{page-break-after:auto;break-after:auto}
+.slide>footer{position:absolute;left:56px;right:56px;bottom:18px;display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
+h1{font-size:46px;line-height:1.15;letter-spacing:-.02em;font-weight:600}
+h2{font-size:32px;line-height:1.2;letter-spacing:-.02em;font-weight:600}
+h3{font-size:19px;font-weight:600;margin-bottom:8px}
+h4{font-size:15px;font-weight:600;margin-bottom:6px}
+.subtitle{font-size:17px;line-height:1.4;color:var(--muted);margin:8px 0 22px}
+.muted{color:var(--muted)}
+.small{font-size:13px;line-height:1.45;color:var(--muted)}
+.tag{display:inline-block;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);font-weight:600;margin-bottom:10px}
+code{font-family:Menlo,Consolas,monospace;font-size:.88em;background:var(--soft);padding:1px 4px;border-radius:3px}
+
+/* Title */
+.title-slide{justify-content:center;padding-left:96px;padding-right:96px}
+.title-slide .lead{font-size:22px;line-height:1.4;color:var(--muted);margin:18px 0 34px;max-width:900px}
+.legend{display:flex;gap:28px;margin-bottom:46px}
+.legend span{display:flex;align-items:center;gap:8px;font-size:15px;color:var(--muted)}
+.legend img{width:32px;height:32px}
+.team{border-top:1px solid var(--line);padding-top:22px;display:grid;grid-template-columns:1fr 1fr;gap:30px;font-size:17px;line-height:1.6}
+.team .names{font-size:22px;font-weight:600;line-height:1.4}
+.title-slide .links{font-size:15px;line-height:1.7}
+
+/* Environment */
+.levels{display:grid;grid-template-columns:repeat(4,1fr);gap:22px;flex:1}
+.level{border-top:2px solid var(--accent);padding-top:12px;display:flex;flex-direction:column;gap:9px}
+.level .limit{font-size:13px;color:var(--muted)}
+.level p{font-size:15px;line-height:1.4}
+.frame{background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.frame img{max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain}
+.map{background:#f1f2f3;height:120px;display:flex;align-items:center;justify-content:center}
+.map img{max-width:100%;max-height:100%;object-fit:contain}
+.goal{background:var(--soft);padding:10px 12px;font-size:15px}
+.cap{font-size:12px;color:var(--muted);line-height:1.35}
+
+/* Interface */
+.cols3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:38px;flex:1}
+.cols3 p,.cols3 dd,.cols3 li{font-size:15px;line-height:1.45}
+.dirs{display:flex;align-items:center;gap:16px;margin:12px 0}
+.dirgrid{display:grid;grid-template-columns:repeat(3,28px);grid-template-rows:repeat(3,28px);gap:3px;text-align:center;align-items:center;font-size:22px}
+.dirgrid img{width:24px;height:24px;justify-self:center}
+.box{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
+ol{padding-left:20px;line-height:1.55}
+.obs dt{font-weight:600;font-size:15px;margin-top:8px}
+.obs dd{color:var(--muted)}
+.rewards>div{display:grid;grid-template-columns:62px 1fr;gap:10px;padding-bottom:9px;margin-bottom:9px;border-bottom:1px solid var(--line)}
+.rewards dt{font-size:24px;font-variant-numeric:tabular-nums}
+.rewards dd{font-size:14px;line-height:1.4}
+
+/* Configuration */
+.cfg{display:grid;grid-template-columns:1.05fr 1fr;gap:40px;flex:1}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top;line-height:1.35}
+thead th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600;border-bottom:2px solid var(--line)}
+tbody th{font-weight:600}
+.params{display:grid;gap:9px}
+.params>div{display:grid;grid-template-columns:150px 1fr;gap:12px;font-size:14px;line-height:1.4;border-bottom:1px solid var(--line);padding-bottom:8px}
+.params dt{font-weight:600}
+.ours{margin-top:16px;background:var(--soft);padding:12px 16px;font-size:14px;line-height:1.5;border-left:3px solid var(--accent)}
+
+/* Random agent */
+.strips{display:grid;grid-template-columns:1fr 1fr;gap:14px 28px}
+.strip h3{font-size:16px;margin-bottom:5px;display:flex;justify-content:space-between;align-items:baseline}
+.strip h3 span{font-size:13px;font-weight:400;color:var(--muted)}
+.strip .frames{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.strip .frame{height:82px}
+.strip .labels{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;font-size:11px;color:var(--muted);margin-top:3px}
+.random-bottom{display:grid;grid-template-columns:1.2fr 1fr;gap:34px;margin-top:16px;align-items:start}
+.random-bottom table{font-size:14px}
+.random-bottom td,.random-bottom th{padding:5px 8px;text-align:center}
+.random-bottom tbody th{text-align:left}
+
+/* Plan */
+.plan{display:grid;grid-template-columns:1fr 1fr;gap:0 40px}
+.plan>div{display:grid;grid-template-columns:170px 1fr;gap:14px;border-top:1px solid var(--line);padding:11px 0}
+.plan dt{font-weight:600;font-size:15px;color:var(--accent)}
+.plan dd{font-size:14.5px;line-height:1.45}
+.plan>div{padding:8px 0}
+.literature{margin-top:6px;border-top:2px solid var(--accent);padding-top:10px}
+.literature table{font-size:14px}
+.literature th,.literature td{padding:4px 8px}
+.ref{position:absolute;left:56px;right:56px;bottom:38px;font-size:11.5px;color:var(--muted)}
+
+/* Demo */
+.demo{display:grid;grid-template-columns:1.45fr 1fr;gap:36px;flex:1;min-height:0}
+.shot{border:1px solid var(--line);background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;max-height:540px}
+.shot img{image-rendering:auto;max-width:100%;max-height:100%;object-fit:contain}
+.demo p,.demo li{font-size:15px;line-height:1.5}
+.demo ul{padding-left:18px}
+.linkbox{margin-top:18px;padding:14px 16px;background:var(--soft);font-size:15px;line-height:1.6}
+</style>
+</head>
+<body>
+
+<!-- 1 · Title -->
+<section class="slide title-slide">
+  <span class="tag">Reinforcement Learning 2026Z · Project presentation 1</span>
+  <h1>MiniHack: Wand of Death</h1>
+  <p class="lead">One reinforcement-learning agent for all four levels of a NetHack task: find the wand, deal with the minotaur, reach the goal.</p>
+  <div class="legend">
+    <span><img src="../website/assets/icon-player.png" alt="">Player</span>
+    <span><img src="../website/assets/icon-wand.png" alt="">Wand of death</span>
+    <span><img src="../website/assets/icon-minotaur.png" alt="">Minotaur</span>
+    <span><img src="../website/assets/icon-stairs.png" alt="">Staircase</span>
+  </div>
+  <div class="team">
+    <div><span class="muted">Team no. 5</span><br><span class="names">Piotr Iśtok<br>Wojciech Jasiński</span></div>
+    <div class="links">
+      <b>Interactive presentation and playable game</b><br>
+      <a href="https://wojtke.github.io/minihack-wand-agent/">wojtke.github.io/minihack-wand-agent</a>
+    </div>
+  </div>
+</section>
+
+<!-- 2 · Environment and task -->
+<section class="slide">
+  <h2>Environment and task</h2>
+  <p class="subtitle">MiniHack [1] (built on the NetHack Learning Environment): a turn-based dungeon. The agent must use a wand of death against a minotaur. Single agent, one opponent.</p>
+  <div class="levels">
+    <article class="level"><h3>Easy</h3><span class="limit">Action limit: <b>50</b></span>
+      <div class="frame" style="height:92px"><img src="../website/assets/easy-demo.png" alt=""></div>
+      <p class="muted">Wand in inventory; sleeping minotaur in a corridor.</p>
+      <div class="map"><img src="../website/assets/level-easy.png" alt=""></div>
+      <p class="goal"><b>Goal:</b> kill the minotaur.</p></article>
+    <article class="level"><h3>Medium</h3><span class="limit">Action limit: <b>150</b></span>
+      <div class="frame" style="height:92px"><img src="../website/assets/medium-demo.png" alt=""></div>
+      <p class="muted">Wand on the floor; sleeping minotaur blocks the corridor.</p>
+      <div class="map"><img src="../website/assets/level-medium.png" alt=""></div>
+      <p class="goal"><b>Goal:</b> reach the staircase.</p></article>
+    <article class="level"><h3>Hard</h3><span class="limit">Action limit: <b>400</b></span>
+      <div class="frame" style="height:92px"><img src="../website/assets/hard-demo.png" alt=""></div>
+      <p class="muted">Find the wand in the start room; the minotaur is awake.</p>
+      <div class="map"><img src="../website/assets/level-hard.png" alt=""></div>
+      <p class="goal"><b>Goal:</b> reach the staircase.</p></article>
+    <article class="level"><h3>Pro</h3><span class="limit">Action limit: <b>1,000</b></span>
+      <div class="frame" style="height:92px"><img src="../website/assets/pro-demo.png" alt=""></div>
+      <p class="muted">Wand hidden somewhere in a maze; minotaur awake.</p>
+      <div class="map"><img src="../website/assets/level-pro.png" alt=""></div>
+      <p class="goal"><b>Goal:</b> reach the staircase.</p></article>
+  </div>
+  <p class="cap" style="margin-top:10px">Top: frames of recorded episodes (videos in the interactive version). Bottom: full maps revealed for illustration only; the agent sees only explored terrain.<br>[1] M. Samvelyan et al., “MiniHack the Planet”, NeurIPS 2021 Datasets and Benchmarks Track, arXiv:2109.13202.</p>
+  <footer><span>MiniHack: Wand of Death · Iśtok, Jasiński</span><span>2</span></footer>
+</section>
+
+<!-- 3 · Interface -->
+<section class="slide">
+  <h2>Actions, observations, reward</h2>
+  <p class="subtitle">An episode ends on success, death or the action limit.</p>
+  <div class="cols3">
+    <article><h3>Action space</h3>
+      <p><b>Discrete, 11 native inputs</b> (Restricted set)</p>
+      <div class="dirs"><div class="dirgrid"><span>↖</span><span>↑</span><span>↗</span><span>←</span><img src="../website/assets/icon-player.png" alt=""><span>→</span><span>↙</span><span>↓</span><span>↘</span></div><p><b>8 directions</b><br>move or attack</p></div>
+      <p><b>3 commands:</b> pick up · use (zap) a wand · fire</p>
+      <div class="box"><h4>Using a wand = 3 decisions</h4><ol><li>“Use a wand”</li><li>select the wand from inventory</li><li>choose a direction</li></ol>
+      <p class="small" style="margin-top:6px">Prompts reuse the same inputs: a direction key can aim instead of moving.</p></div>
+    </article>
+    <article class="obs"><h3>Observations</h3>
+      <p>Partial observability: visible objects and remembered terrain; unexplored areas stay hidden.</p>
+      <div class="frame" style="height:96px;margin:10px 0 4px"><img src="../website/assets/observation-pro.png" alt=""></div>
+      <p class="cap">Pro at the start: only a short corridor is visible.</p>
+      <dl><dt>Map</dt><dd>21×79 arrays of glyphs, characters, colours</dd><dt>Inventory</dt><dd>item names and letters</dd><dt>Character state</dt><dd>health, position, game time</dd><dt>Messages and prompts</dt><dd>e.g. “In what direction?”</dd></dl>
+    </article>
+    <article><h3>Reward (default)</h3>
+      <dl class="rewards"><div><dt>+1</dt><dd><b>Success:</b> minotaur killed (Easy) / staircase reached (other levels)</dd></div><div><dt>0</dt><dd><b>Failure:</b> death or action limit</dd></div><div><dt>−0.01</dt><dd><b>Step penalty</b> when game time does not advance (menu reply, blocked move)</dd></div></dl>
+      <h4 style="margin-top:6px">Easy: a successful wand attack</h4>
+      <p class="cap">Before · minotaur alive</p>
+      <div class="frame" style="height:62px;margin:3px 0 7px"><img src="../website/assets/easy-before.png" alt=""></div>
+      <p class="cap">After · minotaur killed · <b>+1</b></p>
+      <div class="frame" style="height:62px;margin-top:3px"><img src="../website/assets/easy-after.png" alt=""></div>
+      <p class="small" style="margin-top:8px">Sparse: practically one non-zero reward per episode.</p>
+    </article>
+  </div>
+  <footer><span>MiniHack: Wand of Death · Iśtok, Jasiński</span><span>3</span></footer>
+</section>
+
+<!-- 4 · Configuration -->
+<section class="slide">
+  <h2>Configuring the environment</h2>
+  <p class="subtitle">Four difficulty levels, each available with two action sets; further parameters of MiniHack/NLE.</p>
+  <div class="cfg">
+    <div>
+      <h3>Difficulty levels</h3>
+      <table>
+        <thead><tr><th>Level</th><th>Limit</th><th>Wand</th><th>Minotaur</th><th>Varies between episodes</th></tr></thead>
+        <tbody>
+          <tr><th>Easy</th><td>50</td><td>in inventory</td><td>asleep</td><td>nothing</td></tr>
+          <tr><th>Medium</th><td>150</td><td>on the floor</td><td>asleep</td><td>nothing</td></tr>
+          <tr><th>Hard</th><td>400</td><td>in start room</td><td>awake</td><td>player and wand position</td></tr>
+          <tr><th>Pro</th><td>1,000</td><td>in a maze</td><td>awake</td><td>wand position</td></tr>
+        </tbody>
+      </table>
+      <p class="small" style="margin-top:10px">Terrain is fixed per level. Success: kill the minotaur (Easy) or reach the staircase (others).</p>
+      <h3 style="margin-top:18px">Agents and opponents</h3>
+      <p style="font-size:14px;line-height:1.5">Single-agent environment, <b>one opponent</b> (minotaur). Optional: random extra monsters (<code>spawn_monsters</code>), a pet (<code>pet</code>), custom levels via MiniHack’s level generator / des-files.</p>
+    </div>
+    <div>
+      <h3>Parameters</h3>
+      <dl class="params">
+        <div><dt>Action set</dt><dd>Restricted: 11 inputs · Full: 85 inputs (<code>…-Restricted-v0</code> / <code>…-Full-v0</code>)</dd></div>
+        <div><dt>Action limit</dt><dd><code>max_episode_steps</code>, counts every input including menu replies</dd></div>
+        <div><dt>Observations</dt><dd><code>observation_keys</code>: glyphs, chars, colours, stats, message, inventory, pixels, 9×9 crops around the player</dd></div>
+        <div><dt>Rewards</dt><dd><code>reward_win</code>, <code>reward_lose</code>, <code>penalty_step</code>, <code>penalty_time</code>, <code>penalty_mode</code></dd></div>
+        <div><dt>Seeds</dt><dd>control placements in Hard/Pro; separate ranges for training, validation, test</dd></div>
+      </dl>
+      <div class="ours"><b>Our setup:</b> Restricted actions, default limits and rewards. Training only: +0.01 per newly visited square (max +2 per episode), removed for evaluation.</div>
+    </div>
+  </div>
+  <footer><span>MiniHack: Wand of Death · Iśtok, Jasiński</span><span>4</span></footer>
+</section>
+
+<!-- 5 · Random agent -->
+<section class="slide">
+  <h2>A random agent</h2>
+  <p class="subtitle" style="margin-bottom:14px">Each step: one of the 11 inputs chosen uniformly at random. One recording per level, seed fixed in advance. Frames: start · middle · end.</p>
+  <div class="strips">
+    <div class="strip"><h3>Easy <span>action limit after 50 actions</span></h3><div class="frames"><div class="frame"><img src="media/random-easy-0.png" alt=""></div><div class="frame"><img src="media/random-easy-1.png" alt=""></div><div class="frame"><img src="media/random-easy-2.png" alt=""></div></div></div>
+    <div class="strip"><h3>Medium <span>dies after 111 actions</span></h3><div class="frames"><div class="frame"><img src="media/random-medium-0.png" alt=""></div><div class="frame"><img src="media/random-medium-1.png" alt=""></div><div class="frame"><img src="media/random-medium-2.png" alt=""></div></div></div>
+    <div class="strip"><h3>Hard <span>dies after 32 actions</span></h3><div class="frames"><div class="frame"><img src="media/random-hard-0.png" alt=""></div><div class="frame"><img src="media/random-hard-1.png" alt=""></div><div class="frame"><img src="media/random-hard-2.png" alt=""></div></div></div>
+    <div class="strip"><h3>Pro <span>first 150 of 1,000 actions</span></h3><div class="frames"><div class="frame"><img src="media/random-pro-0.png" alt=""></div><div class="frame"><img src="media/random-pro-1.png" alt=""></div><div class="frame"><img src="media/random-pro-2.png" alt=""></div></div></div>
+  </div>
+  <div class="random-bottom">
+    <table><thead><tr><th style="text-align:left">500 games per level</th><th>Easy</th><th>Medium</th><th>Hard</th><th>Pro</th></tr></thead>
+      <tbody><tr><th>Success</th><td><b>28</b> (5.6%)</td><td><b>0</b></td><td><b>0</b></td><td><b>0</b></td></tr><tr><th>Death</th><td>320</td><td>186</td><td>500</td><td>10</td></tr><tr><th>Action limit</th><td>152</td><td>314</td><td>0</td><td>490</td></tr></tbody></table>
+    <p class="small">Videos: slide 3 of the <a href="https://wojtke.github.io/minihack-wand-agent/#3">interactive presentation</a>. Easy succeeds only when random inputs happen to form the wand sequence aimed at the minotaur. With the Full set of 85 inputs: no successes in 100 games per level.</p>
+  </div>
+  <footer><span>MiniHack: Wand of Death · Iśtok, Jasiński</span><span>5</span></footer>
+</section>
+
+<!-- 6 · Plan -->
+<section class="slide">
+  <h2>Plan</h2>
+  <p class="subtitle">One agent for all four levels, trained with reinforcement learning.</p>
+  <dl class="plan">
+    <div><dt>Starting point</dt><dd><b>Double DQN</b>, MLP 128×128, replay buffer, target network, ε-greedy. Input: 463 features from public observations (local map crop, monsters, remembered items and exits, inventory, health, prompt). One network for all levels, no level label.</dd></div>
+    <div><dt>Intermediate goal</dt><dd>One agent that solves Easy, Medium and Hard.</dd></div>
+    <div><dt>Final goal</dt><dd>The same agent also wins on Pro, where the wand has to be found in a maze. Ideas: memory (recurrent policy), example games from a scripted player.</dd></div>
+    <div><dt>Expected performance</dt><dd>Easy and Medium close to 100%, Hard around 80%, some wins on Pro, i.e. beyond the published results [1] below.</dd></div>
+    <div><dt>Baseline</dt><dd>The random agent (previous slide) and the published IMPALA results [1]; later, our first Double DQN as the reference for every new method.</dd></div>
+    <div><dt>Metrics</dt><dd>Reward only says win or loss, so we also track: win rate on unseen seeds · how games end (minotaur, own ray, action limit) · wand picked up · squares explored · actions per win.</dd></div>
+    <div><dt>Comparisons</dt><dd>With / without exploration bonus · several training seeds · memory and demonstrations for Pro.</dd></div>
+    <div><dt>Evaluation</dt><dd>Greedy policy, native reward only, game seeds never used in training.</dd></div>
+  </dl>
+  <div class="literature">
+    <h4>Published results [1]: IMPALA, mean episode return, 5 runs</h4>
+    <table><thead><tr><th>WoD-Easy</th><th>WoD-Medium</th><th>WoD-Hard</th><th>WoD-Pro</th></tr></thead>
+      <tbody><tr><td><b>≈ 0.95</b> within 25M steps</td><td><b>0</b> after 100M steps</td><td><b>0</b> after 250M steps</td><td>not reported</td></tr></tbody></table>
+    <p class="small" style="margin-top:6px">“None of the runs is able to make progress on WoD-Medium […] due to insufficient state-action space exploration.” [1]</p>
+  </div>
+  <p class="ref">[1] M. Samvelyan et al., “MiniHack the Planet: A Sandbox for Open-Ended Reinforcement Learning Research”, NeurIPS 2021 Datasets and Benchmarks Track, arXiv:2109.13202 (Fig. 8, Fig. 31).</p>
+  <footer><span>MiniHack: Wand of Death · Iśtok, Jasiński</span><span>6</span></footer>
+</section>
+
+<!-- 7 · Demo -->
+<section class="slide">
+  <h2>Interactive demonstration</h2>
+  <p class="subtitle">The original NLE engine compiled to WebAssembly runs entirely in the browser, with MiniHack’s task rules and native inputs.</p>
+  <div class="demo">
+    <div class="shot"><img src="media/demo.png" alt="Live game in the browser"></div>
+    <div>
+      <ul>
+        <li>All four levels are playable by a human, using the same 11 inputs as the agent.</li>
+        <li><b>Agent view</b>: what the network receives, i.e. a 9×9 window around the player (blue = visited squares) plus positions of the nearest items, staircases and monsters.</li>
+        <li>Controls: WASD + Q/E/Z/C move or aim, P picks up, R uses the wand, F fires.</li>
+      </ul>
+      <div class="linkbox"><b>Try it:</b><br><a href="https://wojtke.github.io/minihack-wand-agent/#5">wojtke.github.io/minihack-wand-agent/#5</a></div>
+    </div>
+  </div>
+  <footer><span>MiniHack: Wand of Death · Iśtok, Jasiński</span><span>7</span></footer>
+</section>
+
+</body>
+</html>
