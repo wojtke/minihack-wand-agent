@@ -12,6 +12,7 @@ from wand_agent.agents import PPOAgent, load_agent
 from wand_agent.features import DIM
 from wand_agent.native import KEYS
 from wand_agent.ppo import ActorCritic, compute_gae, load_model, ppo_update, save_model
+from wand_agent.rnd import RND, RunningMeanStd
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,7 +66,7 @@ class ModelTests(unittest.TestCase):
         torch.manual_seed(0)
         logits, value = ActorCritic(DIM, len(KEYS))(torch.randn(16, DIM))
         self.assertEqual(logits.shape, (16, len(KEYS)))
-        self.assertEqual(value.shape, (16,))
+        self.assertEqual(value.shape, (16, 1))
         probabilities = logits.softmax(-1)
         self.assertLess((probabilities - 1 / len(KEYS)).abs().max().item(), 0.02)
 
@@ -168,6 +169,52 @@ class MemoryTests(unittest.TestCase):
             self.model(torch.randn(2, 5))
 
 
+class RndTests(unittest.TestCase):
+    def test_bonus_shrinks_for_observations_seen_often_and_target_stays_fixed(self):
+        torch.manual_seed(0)
+        rnd = RND(10, hidden=32, output=8, update_proportion=1.0)
+        seen, novel = torch.randn(32, 10), torch.randn(32, 10) + 2
+        rnd.update_obs_stats(torch.cat([seen, novel]))
+        target_before = [w.clone() for w in rnd.target.parameters()]
+        optimizer = torch.optim.Adam(rnd.predictor.parameters(), lr=1e-3)
+        before = rnd.error(seen).mean().item()
+        for _ in range(300):
+            optimizer.zero_grad()
+            rnd.loss(seen).backward()
+            optimizer.step()
+        after = rnd.error(seen).mean().item()
+        self.assertLess(after, 0.2 * before)
+        self.assertGreater(rnd.error(novel).mean().item(), 3 * after)
+        for old, new in zip(target_before, rnd.target.parameters()):
+            torch.testing.assert_close(old, new)
+            self.assertFalse(new.requires_grad)
+
+    def test_running_statistics_match_all_data(self):
+        stats, data = RunningMeanStd((3,)), torch.randn(500, 3) * 4 + 1
+        for chunk in data.split(77):
+            stats.update(chunk)
+        torch.testing.assert_close(stats.mean, data.mean(0), atol=1e-3, rtol=0)
+        torch.testing.assert_close(stats.var, data.var(0, unbiased=False), atol=1e-2, rtol=1e-3)
+
+    def test_intrinsic_reward_has_rollout_shape_and_is_positive(self):
+        rnd = RND(6, hidden=16, output=4)
+        obs = torch.randn(5, 3, 6)
+        rnd.update_obs_stats(obs)
+        bonus, raw = rnd.intrinsic_reward(obs)
+        self.assertEqual(bonus.shape, (5, 3))
+        self.assertTrue((raw > 0).all() and (bonus > 0).all())
+
+    def test_agent_from_rnd_checkpoint_uses_only_the_policy(self):
+        model = ActorCritic(DIM, len(KEYS), hidden=(16,), value_heads=2)
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'policy.npz'
+            save_model(model, path)
+            agent = load_agent(path)
+        obs = torch.randn(DIM)
+        self.assertEqual(agent.act(obs.numpy()), int(model(obs[None])[0].argmax()))
+        self.assertEqual(model(obs[None])[1].shape, (1, 2))
+
+
 class TrainingSmokeTests(unittest.TestCase):
     def run_training(self, config, *extra):
         with tempfile.TemporaryDirectory() as d:
@@ -190,9 +237,18 @@ class TrainingSmokeTests(unittest.TestCase):
         self.assertEqual((summary['status'], summary['steps'], len(metrics)), ('finished', 512, 2))
 
     def test_wod_short_run(self):
-        summary, metrics = self.run_training('configs/ppo.json', '--steps', '1024')
-        self.assertEqual((summary['status'], summary['steps'], len(metrics)), ('finished', 1024, 1))
+        # Default mix: one Easy game and two of each other level, 128 steps each.
+        summary, metrics = self.run_training('configs/ppo.json', '--steps', '896')
+        self.assertEqual((summary['status'], summary['steps'], len(metrics)), ('finished', 896, 1))
         self.assertTrue(np.isfinite(metrics[0]['entropy']))
+
+    def test_wod_short_run_with_curiosity_and_memory(self):
+        summary, metrics = self.run_training('configs/ppo.json', '--steps', '1792', '--rnd', '--lstm', '16')
+        self.assertEqual((summary['status'], summary['steps'], len(metrics)), ('finished', 1792, 2))
+        for row in metrics:
+            self.assertGreater(row['bonus_raw_mean'], 0)
+            self.assertEqual(len(row['bonus_by_game']), 7)
+            self.assertTrue(np.isfinite(row['rnd_loss']))
 
 
 if __name__ == '__main__':

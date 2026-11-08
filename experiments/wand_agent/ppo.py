@@ -1,16 +1,19 @@
-"""PPO (clipped objective, GAE) for one policy on all four levels, optionally with memory.
+"""PPO (clipped objective, GAE) for one policy on all four levels, optionally with
+memory (LSTM) and a curiosity bonus (RND).
 
-Structure follows CleanRL's ppo.py and ppo_atari_lstm.py (MIT licence,
-https://github.com/vwxyzjn/cleanrl): collect num_steps from every game, compute
-GAE advantages backwards, then run a few epochs of minibatch updates on that
-rollout and discard it.
+Structure follows CleanRL's ppo.py, ppo_atari_lstm.py and ppo_rnd_envpool.py
+(MIT licence, https://github.com/vwxyzjn/cleanrl): collect num_steps from every
+game, compute GAE advantages backwards, then run a few epochs of minibatch
+updates on that rollout and discard it.
 
 Conventions used throughout:
   ends[t]  True when action t ended its game. The observation after it already
            belongs to the next game, so neither the advantage nor the critic's
-           estimate crosses that boundary.
+           estimate of the game's reward crosses that boundary.
   first[t] True when observation t is the first of a game. With memory (LSTM),
            the memory of that game is zeroed before observation t is read.
+  values   [..., K]: K = 1 critic head for the game's reward, K = 2 with RND
+           (second head for the curiosity bonus).
 """
 import argparse
 import json
@@ -24,6 +27,7 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
+from .rnd import RND
 from .toy import MemoryCue
 from .vector import GymVector, VectorEnv
 
@@ -46,20 +50,22 @@ def _body(sizes, activation):
 
 
 class ActorCritic(nn.Module):
-    """Policy (logits) and critic (value) from the same observation.
+    """Policy (logits) and critic (values) from the same observation.
 
     shared=False: two separate MLPs. shared=True: one trunk, two output heads.
     lstm=H > 0: shared trunk -> LSTM with H units -> both heads, as in CleanRL's
     LSTM agent. The LSTM state (h, c) is the agent's memory between steps.
+    value_heads: 1, or 2 when the critic also predicts the curiosity bonus.
     """
 
-    def __init__(self, obs_dim, n_actions, hidden=(128, 128), activation='relu', shared=False, lstm=0):
+    def __init__(self, obs_dim, n_actions, hidden=(128, 128), activation='relu', shared=False, lstm=0,
+                 value_heads=1):
         super().__init__()
         if activation not in ACTIVATIONS:
             raise ValueError(f'Unknown activation {activation!r}')
         shared = bool(shared or lstm)
         self.meta = dict(obs_dim=int(obs_dim), n_actions=int(n_actions), hidden=list(hidden),
-                         activation=activation, shared=shared, lstm=int(lstm))
+                         activation=activation, shared=shared, lstm=int(lstm), value_heads=int(value_heads))
         sizes = [obs_dim, *hidden]
         if shared:
             self.body = _body(sizes, activation)
@@ -77,7 +83,7 @@ class ActorCritic(nn.Module):
             features = lstm
         # Small actor weights: every action starts almost equally likely.
         self.actor = _layer(features, n_actions, std=0.01)
-        self.critic = _layer(features, 1, std=1.0)
+        self.critic = _layer(features, value_heads, std=1.0)
 
     @property
     def recurrent(self):
@@ -92,7 +98,7 @@ class ActorCritic(nn.Module):
     def sequence(self, obs, state=None, first=None):
         """Run T steps of N games in order.
 
-        obs [T, N, D], first [T, N] -> logits [T, N, A], value [T, N], memory after step T.
+        obs [T, N, D], first [T, N] -> logits [T, N, A], values [T, N, K], memory after step T.
         Without LSTM the steps are independent and state stays None.
         """
         steps, n = obs.shape[:2]
@@ -115,19 +121,19 @@ class ActorCritic(nn.Module):
             actor_features = critic_features = torch.cat(outputs).reshape(steps * n, -1)
             state = (h, c)
         return (self.actor(actor_features).reshape(steps, n, -1),
-                self.critic(critic_features).reshape(steps, n), state)
+                self.critic(critic_features).reshape(steps, n, -1), state)
 
     def step(self, obs, state=None, first=None):
-        """One step of N games: obs [N, D] -> logits [N, A], value [N], new memory."""
-        logits, value, state = self.sequence(obs[None], state, None if first is None else first[None])
-        return logits[0], value[0], state
+        """One step of N games: obs [N, D] -> logits [N, A], values [N, K], new memory."""
+        logits, values, state = self.sequence(obs[None], state, None if first is None else first[None])
+        return logits[0], values[0], state
 
     def forward(self, obs):
-        """Memoryless policy only: obs [B, D] -> logits [B, A], value [B]."""
+        """Memoryless policy only: obs [B, D] -> logits [B, A], values [B, K]."""
         if self.recurrent:
             raise RuntimeError('A model with memory needs step() or sequence() and a memory state')
-        logits, value, _ = self.step(obs)
-        return logits, value
+        logits, values, _ = self.step(obs)
+        return logits, values
 
 
 def save_model(model, path):
@@ -176,42 +182,49 @@ def compute_gae(rewards, values, ends, next_value, gamma, lam):
 def _minibatches(model, rollout, c, rng):
     """Yield (logits, values, pick) for each minibatch of one epoch.
 
-    pick(x) selects the entries of a [T, N] rollout tensor that belong to the
-    minibatch, in the same order as logits and values. Without memory a
-    minibatch is any set of transitions. With memory it is a set of whole games
+    pick(x) selects the entries of a [T, N, ...] rollout tensor that belong to
+    the minibatch, in the same order as logits and values. Without memory a
+    minibatch is any set of transitions. With memory it is a set of whole game
     columns, replayed in order from the memory saved before the rollout.
     """
     obs = rollout['obs']
     steps, n = rollout['actions'].shape
+    parts = c['num_minibatches']
     if model.recurrent:
-        per = n // c['num_minibatches']
-        order = rng.permutation(n)
-        for start in range(0, n, per):
-            columns = torch.from_numpy(order[start:start + per])
+        for columns in np.array_split(rng.permutation(n), min(parts, n)):
+            columns = torch.from_numpy(columns)
             state = tuple(s[:, columns] for s in rollout['state'])
             logits, values, _ = model.sequence(obs[:, columns], state, rollout['first'][:, columns])
-            yield logits.reshape(-1, logits.shape[-1]), values.reshape(-1), \
-                lambda x, columns=columns: x[:, columns].reshape(-1)
+            yield (logits.reshape(-1, logits.shape[-1]), values.reshape(-1, values.shape[-1]),
+                   lambda x, columns=columns: x[:, columns].reshape(-1, *x.shape[2:]))
     else:
-        size = steps * n
-        per = size // c['num_minibatches']
-        flat_obs = obs.reshape(size, -1)
-        order = rng.permutation(size)
-        for start in range(0, size, per):
-            index = torch.from_numpy(order[start:start + per])
+        flat_obs = obs.reshape(steps * n, -1)
+        for index in np.array_split(rng.permutation(steps * n), parts):
+            index = torch.from_numpy(index)
             logits, values = model(flat_obs[index])
-            yield logits, values, lambda x, index=index: x.reshape(-1)[index]
+            yield logits, values, lambda x, index=index: x.reshape(-1, *x.shape[2:])[index]
 
 
-def ppo_update(model, optimizer, rollout, c, rng):
+def _value_loss(values, old_values, targets, c):
+    """Sum over critic heads of 0.5 * mean squared error, optionally clipped as in PPO."""
+    if c['clip_vloss']:
+        clipped = old_values + (values - old_values).clamp(-c['clip_coef'], c['clip_coef'])
+        errors = torch.max((values - targets) ** 2, (clipped - targets) ** 2)
+    else:
+        errors = (values - targets) ** 2
+    return 0.5 * errors.mean(0).sum()
+
+
+def ppo_update(model, optimizer, rollout, c, rng, rnd=None):
     """Several epochs of clipped-objective minibatch updates on one rollout.
 
-    rollout: dict of [T, N] tensors (obs is [T, N, D]): obs, actions, logp,
-    advantages, returns, values, first; plus 'state', the memory before step 0.
+    rollout: dict of [T, N] tensors: obs [T, N, D], actions, logp, advantages,
+    returns [T, N, K], values [T, N, K], first; 'state', the memory before
+    step 0; and next_obs [T, N, D] when rnd (the curiosity module) is given.
     """
     stats = defaultdict(list)
     for _ in range(c['update_epochs']):
-        for logits, value, pick in _minibatches(model, rollout, c, rng):
+        for logits, values, pick in _minibatches(model, rollout, c, rng):
             dist = Categorical(logits=logits)
             logp = dist.log_prob(pick(rollout['actions']))
             log_ratio = logp - pick(rollout['logp'])
@@ -226,21 +239,18 @@ def ppo_update(model, optimizer, rollout, c, rng):
             # Pessimistic (larger) of the two losses: no gain for moving ratio beyond 1 +/- clip.
             policy_loss = torch.max(-adv * ratio,
                                     -adv * ratio.clamp(1 - c['clip_coef'], 1 + c['clip_coef'])).mean()
-
-            target, old_values = pick(rollout['returns']), pick(rollout['values'])
-            if c['clip_vloss']:
-                clipped = old_values + (value - old_values).clamp(-c['clip_coef'], c['clip_coef'])
-                value_loss = 0.5 * torch.max((value - target) ** 2, (clipped - target) ** 2).mean()
-            else:
-                value_loss = 0.5 * ((value - target) ** 2).mean()
-
+            value_loss = _value_loss(values, pick(rollout['values']), pick(rollout['returns']), c)
             entropy = dist.entropy().mean()
             loss = policy_loss - c['ent_coef'] * entropy + c['vf_coef'] * value_loss
+            if rnd is not None:
+                rnd_loss = rnd.loss(pick(rollout['next_obs']))
+                loss = loss + rnd_loss
+                stats['rnd_loss'].append(rnd_loss.item())
             if not torch.isfinite(loss):
                 raise RuntimeError('Nonfinite loss')
             optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(model.parameters(), c['max_grad_norm'])
+            nn.utils.clip_grad_norm_([p for g in optimizer.param_groups for p in g['params']], c['max_grad_norm'])
             optimizer.step()
             stats['policy_loss'].append(policy_loss.item())
             stats['value_loss'].append(value_loss.item())
@@ -248,7 +258,8 @@ def ppo_update(model, optimizer, rollout, c, rng):
         if c['target_kl'] is not None and np.mean(stats['approx_kl'][-c['num_minibatches']:]) > c['target_kl']:
             break
     result = {k: float(np.mean(v)) for k, v in stats.items()}
-    returns, values = rollout['returns'], rollout['values']
+    # How much of the spread of the game-reward targets the critic explains.
+    returns, values = rollout['returns'][..., 0], rollout['values'][..., 0]
     variance = returns.var().item()
     result['explained_variance'] = (float('nan') if variance == 0
                                     else 1 - (returns - values).var().item() / variance)
@@ -257,8 +268,7 @@ def ppo_update(model, optimizer, rollout, c, rng):
 
 def make_envs(c):
     if c['env'] == 'wod':
-        levels = [level for _ in range(c['envs_per_level']) for level in c['levels']]
-        return VectorEnv(levels, seed=c['seed'], visit_bonus=c['visit_bonus'], bonus_cap=c['bonus_cap'])
+        return VectorEnv(c['games'], seed=c['seed'], visit_bonus=c['visit_bonus'], bonus_cap=c['bonus_cap'])
     if c['env'] == 'memory':
         return MemoryCue(c['num_envs'], seed=c['seed'], delay=c['delay'])
     return GymVector(c['env'], c['num_envs'], seed=c['seed'])
@@ -268,12 +278,14 @@ def check_config(c):
     positive = ('steps', 'num_steps', 'num_minibatches', 'update_epochs', 'save_every', 'log_every')
     if any(c[k] <= 0 for k in positive):
         raise ValueError(f'These settings must be positive: {positive}')
-    if c['env'] == 'wod' and (c['envs_per_level'] <= 0 or not c['levels']):
-        raise ValueError('Use at least one level and one game per level')
+    if c['env'] == 'wod' and not c['games']:
+        raise ValueError('Use at least one game')
     if not (0 <= c['gamma'] <= 1 and 0 <= c['gae_lambda'] <= 1 and c['clip_coef'] > 0 and c['learning_rate'] > 0):
         raise ValueError('Invalid gamma, gae_lambda, clip_coef or learning_rate')
-    if c.get('lstm', 0) < 0:
+    if c['lstm'] < 0:
         raise ValueError('lstm must be 0 (off) or the number of LSTM units')
+    if c['rnd'] and not 0 < c['rnd_update_proportion'] <= 1:
+        raise ValueError('rnd_update_proportion must be in (0, 1]')
 
 
 def progress(window):
@@ -286,26 +298,33 @@ def progress(window):
     return out
 
 
+DEFAULTS = dict(lstm=0, rnd=False, rnd_ext_coef=2.0, rnd_int_coef=1.0, rnd_gamma=0.99,
+                rnd_update_proportion=0.25, rnd_hidden=256, rnd_output=64)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--config', type=Path, default=Path('configs/ppo.json'))
     p.add_argument('--out', type=Path, default=Path('runs/ppo'))
     p.add_argument('--steps', type=int, help='Override total game steps')
     p.add_argument('--seed', type=int)
-    p.add_argument('--levels', nargs='+', help='Override levels (MiniHack only)')
-    p.add_argument('--envs-per-level', type=int)
+    p.add_argument('--games', nargs='+', help='MiniHack: one level name per parallel game, e.g. Easy Medium Medium')
+    p.add_argument('--levels', nargs='+', help='MiniHack: shorthand with --envs-per-level for equal shares')
+    p.add_argument('--envs-per-level', type=int, default=1)
     p.add_argument('--lstm', type=int, help='LSTM units (0 = no memory)')
+    p.add_argument('--rnd', action=argparse.BooleanOptionalAction, help='Curiosity bonus (RND) on or off')
     a = p.parse_args()
-    c = json.loads(a.config.read_text())
-    c.setdefault('lstm', 0)
-    for key, value in (('steps', a.steps), ('seed', a.seed), ('levels', a.levels),
-                       ('envs_per_level', a.envs_per_level), ('lstm', a.lstm)):
+    c = {**DEFAULTS, **json.loads(a.config.read_text())}
+    if a.levels:
+        c['games'] = [level for _ in range(a.envs_per_level) for level in a.levels]
+    for key, value in (('steps', a.steps), ('seed', a.seed), ('games', a.games), ('lstm', a.lstm), ('rnd', a.rnd)):
         if value is not None:
             c[key] = value
     try:
         check_config(c)
     except ValueError as error:
         p.error(str(error))
+    a.out.mkdir(parents=True, exist_ok=False)  # never overwrite earlier evidence
 
     torch.set_num_threads(1)
     torch.manual_seed(c['seed'])
@@ -313,19 +332,21 @@ def main():
     envs = make_envs(c)
     n, steps = envs.num_envs, c['num_steps']
     batch_size = n * steps
-    units = n if c['lstm'] else batch_size  # with memory, minibatches are made of whole games
-    if units % c['num_minibatches']:
-        envs.close()
-        p.error(f"num_minibatches must divide {'the number of games' if c['lstm'] else 'num_envs * num_steps'}")
-    a.out.mkdir(parents=True, exist_ok=False)  # never overwrite earlier evidence
     iterations = max(1, c['steps'] // batch_size)
     c.update(num_envs=n, batch_size=batch_size, iterations=iterations)
     (a.out / 'config.json').write_text(json.dumps(c, indent=2) + '\n')
 
-    model = ActorCritic(envs.obs_dim, envs.n_actions, c['hidden'], c['activation'], c['shared'], c['lstm'])
-    optimizer = torch.optim.Adam(model.parameters(), lr=c['learning_rate'], eps=1e-5)
-    rollout = dict(obs=torch.zeros(steps, n, envs.obs_dim), actions=torch.zeros(steps, n, dtype=torch.long),
-                   logp=torch.zeros(steps, n), rewards=torch.zeros(steps, n), values=torch.zeros(steps, n),
+    heads = 2 if c['rnd'] else 1
+    model = ActorCritic(envs.obs_dim, envs.n_actions, c['hidden'], c['activation'], c['shared'], c['lstm'], heads)
+    parameters = list(model.parameters())
+    rnd = None
+    if c['rnd']:
+        rnd = RND(envs.obs_dim, c['rnd_hidden'], c['rnd_output'], c['rnd_gamma'], c['rnd_update_proportion'])
+        parameters += list(rnd.predictor.parameters())
+    optimizer = torch.optim.Adam(parameters, lr=c['learning_rate'], eps=1e-5)
+    rollout = dict(obs=torch.zeros(steps, n, envs.obs_dim), next_obs=torch.zeros(steps, n, envs.obs_dim),
+                   actions=torch.zeros(steps, n, dtype=torch.long), logp=torch.zeros(steps, n),
+                   rewards=torch.zeros(steps, n), values=torch.zeros(steps, n, heads),
                    ends=torch.zeros(steps, n, dtype=torch.bool), first=torch.zeros(steps, n, dtype=torch.bool))
 
     window = defaultdict(lambda: deque(maxlen=100))
@@ -345,11 +366,11 @@ def main():
                 # 1. Collect: the current policy plays num_steps in every game.
                 for t in range(steps):
                     with torch.no_grad():
-                        logits, value, state = model.step(obs, state, first)
+                        logits, values, state = model.step(obs, state, first)
                         dist = Categorical(logits=logits)
                         action = dist.sample()
                     rollout['obs'][t], rollout['first'][t] = obs, first
-                    rollout['actions'][t], rollout['logp'][t], rollout['values'][t] = action, dist.log_prob(action), value
+                    rollout['actions'][t], rollout['logp'][t], rollout['values'][t] = action, dist.log_prob(action), values
                     next_obs, rewards, ends, infos = envs.step(action.numpy())
                     global_step += n
                     rollout['rewards'][t] = torch.from_numpy(rewards)
@@ -358,27 +379,44 @@ def main():
                         if info is not None:
                             episodes.write(json.dumps(dict(global_step=global_step, **info)) + '\n')
                             window[info['level']].append(info)
-                    obs = torch.as_tensor(next_obs)
+                    obs = rollout['next_obs'][t] = torch.as_tensor(next_obs)
 
                 # 2. Advantages, bootstrapping from the critic after the last step.
+                extra = {}
                 with torch.no_grad():
-                    next_value = model.step(obs, state, first)[1]
-                    rollout['advantages'], rollout['returns'] = compute_gae(
-                        rollout['rewards'], rollout['values'], rollout['ends'], next_value, c['gamma'], c['gae_lambda'])
+                    next_values = model.step(obs, state, first)[1]
+                    advantages, returns = compute_gae(rollout['rewards'], rollout['values'][..., 0], rollout['ends'],
+                                                      next_values[:, 0], c['gamma'], c['gae_lambda'])
+                    if rnd is not None:
+                        # The bonus does not stop at game ends: novelty carries over to the next game.
+                        rnd.update_obs_stats(rollout['next_obs'])
+                        bonus, raw = rnd.intrinsic_reward(rollout['next_obs'])
+                        int_advantages, int_returns = compute_gae(
+                            bonus, rollout['values'][..., 1], torch.zeros_like(rollout['ends']),
+                            next_values[:, 1], c['rnd_gamma'], c['gae_lambda'])
+                        advantages = c['rnd_ext_coef'] * advantages + c['rnd_int_coef'] * int_advantages
+                        returns = torch.stack([returns, int_returns], -1)
+                        extra = dict(bonus_mean=float(bonus.mean()), bonus_raw_mean=float(raw.mean()),
+                                     bonus_by_game=[round(float(x), 4) for x in bonus.mean(0)])
+                    else:
+                        returns = returns[..., None]
+                rollout['advantages'], rollout['returns'] = advantages, returns
 
                 # 3. Learn from this rollout, then it is discarded.
-                stats = ppo_update(model, optimizer, rollout, c, rng)
+                stats = ppo_update(model, optimizer, rollout, c, rng, rnd)
 
                 seconds = time.monotonic() - started
                 row = dict(iteration=iteration, global_step=global_step, seconds=round(seconds, 1),
                            sps=round(global_step / seconds), learning_rate=optimizer.param_groups[0]['lr'],
-                           rollout_reward=float(rollout['rewards'].sum() / n), **stats)
+                           rollout_reward=float(rollout['rewards'].sum() / n), **stats, **extra)
                 metrics.write(json.dumps(row) + '\n')
                 if iteration % c['log_every'] == 0 or iteration == iterations:
-                    print(json.dumps(dict(step=global_step, sps=row['sps'], entropy=round(stats['entropy'], 3),
-                                          approx_kl=round(stats['approx_kl'], 4),
-                                          explained_variance=round(stats['explained_variance'], 3),
-                                          recent=progress(window))), flush=True)
+                    shown = dict(step=global_step, sps=row['sps'], entropy=round(stats['entropy'], 3),
+                                 approx_kl=round(stats['approx_kl'], 4),
+                                 explained_variance=round(stats['explained_variance'], 3))
+                    if rnd is not None:
+                        shown['bonus_raw'] = round(extra['bonus_raw_mean'], 4)
+                    print(json.dumps(dict(**shown, recent=progress(window))), flush=True)
                 if global_step // c['save_every'] != (global_step - batch_size) // c['save_every']:
                     save_model(model, a.out / f'step-{global_step:09d}.npz')
         status = 'finished'

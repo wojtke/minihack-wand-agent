@@ -1,7 +1,6 @@
 {
   "env": "wod",
-  "levels": ["Easy", "Medium", "Hard", "Pro"],
-  "envs_per_level": 2,
+  "games": ["Easy", "Medium", "Hard", "Pro", "Medium", "Hard", "Pro"],
   "visit_bonus": 0.0,
   "bonus_cap": 2.0,
   "seed": 1,
@@ -24,6 +23,13 @@
   "activation": "relu",
   "shared": false,
   "lstm": 0,
+  "rnd": false,
+  "rnd_ext_coef": 2.0,
+  "rnd_int_coef": 1.0,
+  "rnd_gamma": 0.99,
+  "rnd_update_proportion": 0.25,
+  "rnd_hidden": 256,
+  "rnd_output": 64,
   "save_every": 500000,
   "log_every": 20
 }

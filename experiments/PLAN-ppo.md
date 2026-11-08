@@ -70,12 +70,22 @@ Kamień milowy: „działający agent” na prezentację 3–4 grudnia.
 
 ## Etap 4: RND
 
+`--rnd` (`wand_agent/rnd.py`): sieć docelowa (stała, losowa) i sieć ucząca się ją przewidywać; błąd przewidywania to bonus za nowość. Druga głowa krytyka uczy się bonusu, przewaga = 2 · przewaga z nagrody gry + 1 · przewaga z bonusu (jak w CleanRL `ppo_rnd_envpool.py`). Bonus nie zatrzymuje się na końcu gry. Obserwacje normalizowane bieżącą średnią i odchyleniem, bonus dzielony przez odchylenie swojej zdyskontowanej sumy.
+
+Od tego etapu domyślny zestaw gier to 1× Easy i po 2× Medium, Hard, Pro (7 gier). Easy ma stałą mapę i rozwiązanie z 3 klawiszy, więc 2 gry Easy tylko zabierały kroki i dawały większość dodatniego sygnału. Wyniki z etapów 2–3 (po 2× Easy) nie są wprost porównywalne; dla porównania jest przebieg PPO bez RND na nowym zestawie.
+
 Poprawność:
-- [ ] Bonus maleje dla wielokrotnie pokazywanej tej samej obserwacji (test).
-- [ ] Ewaluacja liczy tylko natywne nagrody (test).
+- [x] Bonus maleje dla wielokrotnie pokazywanej obserwacji (po treningu predyktora < 20% początkowego), a dla nowych zostaje wyższy; sieć docelowa się nie zmienia (test).
+- [x] Agent z checkpointu RND gra tylko polityką; ewaluacja liczy tylko nagrody gry (test, `evaluate.py` bez bonusu).
+- [x] Krótki trening z `--rnd --lstm` loguje bonus (surowy, znormalizowany, dla każdej gry) i stratę predyktora (test).
 
 Wynik na WoD (zapisany, bez progu):
-- [ ] Trening z bonusem i bez, te same ustawienia i seedy; krzywe bonusu w logach.
+- [x] PPO bez RND, nowy zestaw gier, 3 mln kroków, seed 1 (`runs/ppo-wod-3m-mix1easy-s1`): Easy 100% po ok. 160 tys. kroków, Medium/Hard/Pro 0%; ewaluacja 200 gier na poziom: 200/0/0/0. Medium kończy się głównie limitem akcji, Hard śmiercią po ok. 20 krokach.
+- [x] PPO + RND, 3 mln kroków, seed 1 (`runs/ppo-wod-3m-rnd-s1`, powtórzony identycznie jako `-s1b`) i seed 2 (`runs/ppo-wod-3m-rnd-s2`). Ewaluacja 200 gier: seed 1 0/0/0/0, seed 2 200/0/0/0.
+  - Seed 1: agent w ciągu pierwszych 20 tys. kroków przestaje wygrywać Easy i do końca ginie tam po ok. 12 krokach. To nie jest błąd w RND: ten sam zestaw na samym Easy uczy się do 100%, a przy minimalnie innej konfiguracji (inna długość treningu, czyli inne wygaszanie LR) seed 1 uczy Easy normalnie. Trening jest powtarzalny przy identycznej komendzie, ale wrażliwy na drobne zmiany.
+  - Bonus (znormalizowany) jest mały, ok. 0,001–0,01 na krok; najwyższy na Medium i Pro, prawie zero na Easy.
+  - Na Medium, Hard i Pro RND nic nie daje: 0% wygranych, Hard ginie po ok. 25 krokach, Medium częściej ginie niż bez RND.
+- Wniosek: sam RND na tych cechach nie wystarcza; do sprawdzenia większy `rnd_int_coef`, entropia, RND z LSTM, E3B (bonus liczony w obrębie gry).
 
 ## Etap 5: E3B (opcjonalnie)
 

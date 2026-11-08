@@ -45,13 +45,14 @@ python -m wand_agent.evaluate --model random --games 1000 --out runs/random-eval
 
 `evaluate` and `play` accept a checkpoint path or `random` and use the shared interface in `wand_agent/agents.py`. `wand_agent/vector.py` steps several games in parallel processes for on-policy training.
 
-**PPO** ([wand_agent/ppo.py](experiments/wand_agent/ppo.py), settings in [configs/ppo.json](experiments/configs/ppo.json)) trains one actor-critic on 8 parallel games (2 per level) with clipped updates and GAE. A run writes `config.json`, `episodes.jsonl`, `metrics.jsonl` (entropy, approx. KL, clip fraction, explained variance, losses per update), `summary.json` and checkpoints. `configs/ppo-cartpole.json` checks the learning code on CartPole-v1, where a correct PPO reaches a mean return near 500. `--lstm N` adds memory (an LSTM between the shared trunk and both heads); `configs/ppo-memory.json` is a remember-the-cue task that a policy without memory can only guess (50%) and a working LSTM solves.
+**PPO** ([wand_agent/ppo.py](experiments/wand_agent/ppo.py), settings in [configs/ppo.json](experiments/configs/ppo.json)) trains one actor-critic on 7 parallel games (one Easy, two of each other level; Easy is a fixed 3-input solution) with clipped updates and GAE. A run writes `config.json`, `episodes.jsonl`, `metrics.jsonl` (entropy, approx. KL, clip fraction, explained variance, losses per update), `summary.json` and checkpoints. `configs/ppo-cartpole.json` checks the learning code on CartPole-v1, where a correct PPO reaches a mean return near 500. `--lstm N` adds memory (an LSTM between the shared trunk and both heads); `configs/ppo-memory.json` is a remember-the-cue task that a policy without memory can only guess (50%) and a working LSTM solves. `--rnd` adds a curiosity bonus (Random Network Distillation): a second critic head learns the bonus, which is logged per update but never used in evaluation.
 
 ```sh
 python -m wand_agent.ppo --config configs/ppo-cartpole.json --out runs/ppo-cartpole  # ~20 s
 python -m wand_agent.ppo --out runs/ppo                                             # all levels, 10M actions
 python -m wand_agent.ppo --levels Easy --envs-per-level 8 --out runs/ppo-easy       # one level
 python -m wand_agent.ppo --lstm 128 --out runs/ppo-lstm                             # with memory
+python -m wand_agent.ppo --rnd --out runs/ppo-rnd                                   # with curiosity bonus
 python -m wand_agent.ppo --config configs/ppo-memory.json --lstm 32 --out runs/memory  # memory check, ~40 s
 python -m wand_agent.evaluate --model runs/ppo/latest.npz --games 100 --out runs/ppo-eval.json  # add --sample to draw actions
 ```
