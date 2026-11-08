@@ -40,7 +40,10 @@ python -m wand_agent.train --steps 6000 --out runs/smoke  # installation/learnin
 python -m wand_agent.train --out runs/dqn               # fresh policy, 1M actions
 python -m wand_agent.evaluate --model runs/dqn/latest.npz --games 100 --out runs/dqn-eval.json
 python -m wand_agent.evaluate --games 100 --out runs/included-eval.json
+python -m wand_agent.evaluate --model random --games 1000 --out runs/random-eval.json  # baseline
 ```
+
+`evaluate` and `play` accept a checkpoint path or `random` and use the shared interface in `wand_agent/agents.py`. `wand_agent/vector.py` steps several games in parallel processes for on-policy training.
 
 The baseline is **Double DQN**, a **128 × 128 MLP**, uniform replay and equal action budgets across all four levels. [configs/dqn.json](experiments/configs/dqn.json) holds the settings; use `--config`, `--seed 7` or `--no-bonus` for comparisons. Add method implementations to the existing `wand_agent/` package when needed, with their settings in `configs/`; separate output directories keep runs independent.
 

@@ -25,12 +25,13 @@ Przeczytać `ppo_atari_lstm.py` (CleanRL) i „The 37 Implementation Details of 
 
 ## Etap 1: wspólna infrastruktura
 
-Równoległe środowiska (8 gier, po 2 na poziom), wspólny interfejs agenta `reset()` / `act(obs)`, logi do plików.
+Równoległe środowiska (`wand_agent/vector.py`, 8 gier, po 2 na poziom), wspólny interfejs agenta `reset()` / `act(obs)` (`wand_agent/agents.py`), `evaluate.py` i `play.py` na tym interfejsie. Logi treningu przechodzą do etapu 2, gdzie są potrzebne.
 
-- [ ] Stare testy przechodzą.
-- [ ] Nowy `evaluate.py` daje dla checkpointu DQN 20/20/12/0 wygranych (20 gier na poziom od seeda 210000000, jak w `checkpoints/export-validation.json`).
-- [ ] Ten sam seed daje te same gry w środowiskach równoległych.
-- [ ] Losowy agent na 8 procesach: ok. 25–30 tys. akcji/s.
+- [x] Stare testy przechodzą.
+- [x] Nowy `evaluate.py` daje dla checkpointu DQN 20/20/12/0 wygranych (20 gier na poziom od seeda 210000000, jak w `checkpoints/export-validation.json`; wszystkie średnie identyczne).
+- [x] Ten sam seed daje te same gry w procesach i w jednym procesie (test).
+- [x] Prędkość: losowy agent, 8 gier: ok. 15 tys. akcji/s (10 mln kroków ≈ 11 min gry). Mniej niż 32 tys./s z pomiaru bez synchronizacji, bo reset gry (ok. 1,2 ms) wstrzymuje pozostałe gry w tym samym kroku. Wystarcza; nie optymalizujemy.
+- [x] Agent losowy, 1000 gier na poziom: Easy 6,2% (95%: 4,9–7,9%), pozostałe 0%.
 
 ## Etap 2: PPO bez LSTM (MLP na 463 cechach)
 
