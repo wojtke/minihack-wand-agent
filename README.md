@@ -45,6 +45,15 @@ python -m wand_agent.evaluate --model random --games 1000 --out runs/random-eval
 
 `evaluate` and `play` accept a checkpoint path or `random` and use the shared interface in `wand_agent/agents.py`. `wand_agent/vector.py` steps several games in parallel processes for on-policy training.
 
+**PPO** ([wand_agent/ppo.py](experiments/wand_agent/ppo.py), settings in [configs/ppo.json](experiments/configs/ppo.json)) trains one actor-critic on 8 parallel games (2 per level) with clipped updates and GAE. A run writes `config.json`, `episodes.jsonl`, `metrics.jsonl` (entropy, approx. KL, clip fraction, explained variance, losses per update), `summary.json` and checkpoints. `configs/ppo-cartpole.json` checks the learning code on CartPole-v1, where a correct PPO reaches a mean return near 500.
+
+```sh
+python -m wand_agent.ppo --config configs/ppo-cartpole.json --out runs/ppo-cartpole  # ~20 s
+python -m wand_agent.ppo --out runs/ppo                                             # all levels, 10M actions
+python -m wand_agent.ppo --levels Easy --envs-per-level 8 --out runs/ppo-easy       # one level
+python -m wand_agent.evaluate --model runs/ppo/latest.npz --games 100 --out runs/ppo-eval.json  # add --sample to draw actions
+```
+
 The baseline is **Double DQN**, a **128 × 128 MLP**, uniform replay and equal action budgets across all four levels. [configs/dqn.json](experiments/configs/dqn.json) holds the settings; use `--config`, `--seed 7` or `--no-bonus` for comparisons. Add method implementations to the existing `wand_agent/` package when needed, with their settings in `configs/`; separate output directories keep runs independent.
 
 The policy sees **463 features** from public observations: a local crop, visible monsters, remembered objects/exits, inventory, health, elapsed actions, prompts and previous inputs. This interface-specific encoder has limited memory. It receives no difficulty label, hidden state, route or action mask. Actions are the 11 native inputs `kljhunby,zf`. Success, death and the native horizon end bootstrapping. The only extra reward is **+0.01 per newly visited observed position**, capped at +2 per episode; initial and terminal positions earn no bonus. Evaluation is greedy and uses only native rewards.

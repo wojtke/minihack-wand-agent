@@ -16,7 +16,8 @@ import signal
 import numpy as np
 
 from .env import AgentEnv
-from .native import LEVELS
+from .features import DIM
+from .native import KEYS, LEVELS
 
 TRAIN_SEED_LIMIT = 100_000_000
 
@@ -101,6 +102,9 @@ class VectorEnv:
         else:
             self.games = [Game(*a) for a in args]
 
+    obs_dim = DIM
+    n_actions = len(KEYS)
+
     @property
     def num_envs(self):
         return len(self.levels)
@@ -147,6 +151,63 @@ class VectorEnv:
         else:
             for game in self.games:
                 game.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+class GymVector:
+    """The VectorEnv interface for any Gymnasium task, in this process.
+
+    Used to check the learning code on a task with a known solution (CartPole).
+    Truncation counts as the end of a game, as in our MiniHack tasks.
+    """
+
+    def __init__(self, env_id, num_envs, seed=0):
+        import gymnasium as gym
+        self.env_id = env_id
+        self.envs = [gym.make(env_id) for _ in range(num_envs)]
+        self.rngs = [np.random.default_rng(s) for s in np.random.SeedSequence(seed).spawn(num_envs)]
+        self.obs_dim = int(np.prod(self.envs[0].observation_space.shape))
+        self.n_actions = int(self.envs[0].action_space.n)
+        self.num_envs = num_envs
+        self.seeds = [None] * num_envs
+        self.totals = [0.0] * num_envs
+        self.lengths = [0] * num_envs
+
+    def _reset(self, i):
+        self.seeds[i] = int(self.rngs[i].integers(0, TRAIN_SEED_LIMIT))
+        self.totals[i], self.lengths[i] = 0.0, 0
+        obs, _ = self.envs[i].reset(seed=self.seeds[i])
+        return np.asarray(obs, np.float32).ravel()
+
+    def reset(self):
+        return np.stack([self._reset(i) for i in range(self.num_envs)])
+
+    def step(self, actions):
+        rows, rewards, dones, infos = [], [], [], []
+        for i, (env, action) in enumerate(zip(self.envs, actions)):
+            obs, reward, term, trunc, _ = env.step(int(action))
+            self.totals[i] += float(reward)
+            self.lengths[i] += 1
+            done = bool(term or trunc)
+            info = None
+            if done:
+                info = dict(level=self.env_id, seed=self.seeds[i], native_return=self.totals[i],
+                            steps=self.lengths[i])
+                obs = self._reset(i)
+            rows.append(np.asarray(obs, np.float32).ravel())
+            rewards.append(reward)
+            dones.append(done)
+            infos.append(info)
+        return np.stack(rows), np.asarray(rewards, np.float32), np.asarray(dones, bool), infos
+
+    def close(self):
+        for env in self.envs:
+            env.close()
 
     def __enter__(self):
         return self

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
+import torch
 
 from .native import KEYS
 from .network import load as load_q_network
@@ -46,7 +47,25 @@ class QAgent:
         return self.network.action(obs)
 
 
-def load_agent(spec, seed=0):
+class PPOAgent:
+    """Actor of a PPO checkpoint. Greedy by default; sample=True draws from the policy."""
+
+    def __init__(self, model, sample=False, seed=0):
+        self.model, self.sample = model, sample
+        self.generator = torch.Generator().manual_seed(seed)
+
+    def reset(self):
+        pass
+
+    @torch.no_grad()
+    def act(self, obs):
+        logits, _ = self.model(torch.as_tensor(obs, dtype=torch.float32)[None])
+        if self.sample:
+            return int(torch.multinomial(logits.softmax(-1)[0], 1, generator=self.generator).item())
+        return int(logits.argmax().item())
+
+
+def load_agent(spec, seed=0, sample=False):
     """'random' or a checkpoint path. Checkpoints without a 'kind' entry are DQN."""
     if spec == 'random':
         return RandomAgent(seed)
@@ -55,4 +74,7 @@ def load_agent(spec, seed=0):
         kind = str(data['kind']) if 'kind' in data.files else 'dqn'
     if kind == 'dqn':
         return QAgent(load_q_network(path))
+    if kind == 'ppo':
+        from .ppo import load_model
+        return PPOAgent(load_model(path), sample=sample, seed=seed)
     raise ValueError(f'Unknown checkpoint kind {kind!r} in {path}')

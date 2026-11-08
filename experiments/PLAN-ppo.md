@@ -35,16 +35,20 @@ Równoległe środowiska (`wand_agent/vector.py`, 8 gier, po 2 na poziom), wspó
 
 ## Etap 2: PPO bez LSTM (MLP na 463 cechach)
 
-`wand_agent/ppo.py`, `configs/ppo.json`, testy.
+`wand_agent/ppo.py`, `configs/ppo.json`, `configs/ppo-cartpole.json`, `tests/test_ppo.py`. Aktor i krytyk jako osobne sieci 463 → 128 → 128 (przełącznik `shared` daje wspólny tułów).
 
 Poprawność:
-- [ ] Test GAE zgodny z wynikiem policzonym ręcznie; koniec gry przerywa liczenie przewagi.
-- [ ] Na `CartPole-v1` (gymnasium) średni wynik dochodzi do ok. 500, jak w publikowanych wynikach CleanRL. Porażka = błąd w kodzie.
-- [ ] Logi: entropia, KL, clipfrac, wyjaśniona wariancja krytyka, straty, nagrody.
+- [x] Test GAE zgodny z wynikiem policzonym ręcznie (gra z → f → l na Easy); koniec gry przerywa liczenie przewagi, ostatni krok porcji bierze ocenę krytyka.
+- [x] `CartPole-v1`, 500 tys. kroków, seed 1: średnia z ostatnich 100 gier dochodzi do 490–498 (maks. 500), na końcu 476. Trwa ok. 20 s.
+- [x] Logi w `metrics.jsonl`: entropia, KL, clipfrac, wyjaśniona wariancja, straty, learning rate, nagroda z porcji. Gry w `episodes.jsonl`.
 
-Wynik na WoD (zapisany, bez progu):
-- [ ] Trening na samym Easy i na wszystkich czterech poziomach: krzywe uczenia i ewaluacja.
-- [ ] Porównanie z losowym agentem (Easy 5,6% wygranych) i z DQN.
+Wynik na WoD (zapisany, bez progu), 1 seed:
+- [x] Wszystkie poziomy, 3 mln kroków (`runs/ppo-wod-3m-s1`): Easy 100% po ok. 80 tys. kroków; Medium, Hard, Pro 0%. Zwrot na Pro rośnie z ok. −8 do ok. 0: agent uczy się tylko nie marnować ruchów. Na Medium mija różdżkę (nie nauczył się `,`, bo na Easy jest autopickup) i ginie od minotaura; na Hard ginie po ok. 18 krokach. Ewaluacja 200 gier na poziom: 200/0/0/0, tak samo z losowaniem akcji (`--sample`).
+- [x] Samo Easy, 300 tys. kroków: 100% po ok. 40 tys. kroków.
+- [x] Porównanie: agent losowy Easy 6,2%, reszta 0%; DQN (checkpoint) 100/99,8/80/0%. PPO bez dodatków jest na Medium i Hard dużo słabszy od DQN, który ma bonus +0,01 za nowe pole (tu `visit_bonus` = 0).
+- [ ] Do sprawdzenia przy porównaniu: PPO z tym samym bonusem co DQN (`visit_bonus` 0,01), więcej seedów.
+
+Prędkość treningu: ok. 4 tys. akcji/s zamiast 15 tys. z samej gry. Po nauczeniu Easy każda gra Easy trwa 3 kroki, więc prawie w każdym kroku któraś gra się restartuje (1,2 ms), a pozostałe czekają. Sieć to ok. 0,1 ms na krok, aktualizacja ok. 0,13 ms na krok. 10 mln kroków to ok. 40 min.
 
 ## Etap 3: LSTM
 
