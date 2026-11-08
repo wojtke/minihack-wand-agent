@@ -20,6 +20,7 @@
   "hidden": [64, 64],
   "activation": "tanh",
   "shared": false,
+  "lstm": 0,
   "save_every": 100000,
   "log_every": 50
 }

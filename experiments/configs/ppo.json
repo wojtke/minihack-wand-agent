@@ -23,6 +23,7 @@
   "hidden": [128, 128],
   "activation": "relu",
   "shared": false,
+  "lstm": 0,
   "save_every": 500000,
   "log_every": 20
 }

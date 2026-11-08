@@ -1,12 +1,16 @@
-"""PPO (clipped objective, GAE) for one policy on all four levels.
+"""PPO (clipped objective, GAE) for one policy on all four levels, optionally with memory.
 
-Structure follows CleanRL's ppo.py (MIT licence, https://github.com/vwxyzjn/cleanrl):
-collect num_steps from every game, compute GAE advantages backwards, then run
-a few epochs of minibatch updates on that rollout and discard it.
+Structure follows CleanRL's ppo.py and ppo_atari_lstm.py (MIT licence,
+https://github.com/vwxyzjn/cleanrl): collect num_steps from every game, compute
+GAE advantages backwards, then run a few epochs of minibatch updates on that
+rollout and discard it.
 
-Convention used throughout: ends[t] is True when action t ended its game. The
-observation after it already belongs to the next game, so neither the advantage
-nor the critic's estimate crosses that boundary.
+Conventions used throughout:
+  ends[t]  True when action t ended its game. The observation after it already
+           belongs to the next game, so neither the advantage nor the critic's
+           estimate crosses that boundary.
+  first[t] True when observation t is the first of a game. With memory (LSTM),
+           the memory of that game is zeroed before observation t is read.
 """
 import argparse
 import json
@@ -20,6 +24,7 @@ import torch
 from torch import nn
 from torch.distributions import Categorical
 
+from .toy import MemoryCue
 from .vector import GymVector, VectorEnv
 
 ACTIVATIONS = {'tanh': nn.Tanh, 'relu': nn.ReLU}
@@ -41,37 +46,88 @@ def _body(sizes, activation):
 
 
 class ActorCritic(nn.Module):
-    """Policy (11 logits) and critic (1 value) from the same observation.
+    """Policy (logits) and critic (value) from the same observation.
 
     shared=False: two separate MLPs. shared=True: one trunk, two output heads.
+    lstm=H > 0: shared trunk -> LSTM with H units -> both heads, as in CleanRL's
+    LSTM agent. The LSTM state (h, c) is the agent's memory between steps.
     """
 
-    def __init__(self, obs_dim, n_actions, hidden=(128, 128), activation='relu', shared=False):
+    def __init__(self, obs_dim, n_actions, hidden=(128, 128), activation='relu', shared=False, lstm=0):
         super().__init__()
         if activation not in ACTIVATIONS:
             raise ValueError(f'Unknown activation {activation!r}')
+        shared = bool(shared or lstm)
         self.meta = dict(obs_dim=int(obs_dim), n_actions=int(n_actions), hidden=list(hidden),
-                         activation=activation, shared=bool(shared))
+                         activation=activation, shared=shared, lstm=int(lstm))
         sizes = [obs_dim, *hidden]
         if shared:
             self.body = _body(sizes, activation)
         else:
             self.actor_body = _body(sizes, activation)
             self.critic_body = _body(sizes, activation)
+        features = sizes[-1]
+        if lstm:
+            self.lstm = nn.LSTM(features, lstm)
+            for name, param in self.lstm.named_parameters():
+                if 'bias' in name:
+                    nn.init.zeros_(param)
+                else:
+                    nn.init.orthogonal_(param, 1.0)
+            features = lstm
         # Small actor weights: every action starts almost equally likely.
-        self.actor = _layer(sizes[-1], n_actions, std=0.01)
-        self.critic = _layer(sizes[-1], 1, std=1.0)
+        self.actor = _layer(features, n_actions, std=0.01)
+        self.critic = _layer(features, 1, std=1.0)
+
+    @property
+    def recurrent(self):
+        return self.meta['lstm'] > 0
+
+    def initial_state(self, n):
+        """Empty memory for n games (None without LSTM)."""
+        if not self.recurrent:
+            return None
+        return torch.zeros(1, n, self.meta['lstm']), torch.zeros(1, n, self.meta['lstm'])
+
+    def sequence(self, obs, state=None, first=None):
+        """Run T steps of N games in order.
+
+        obs [T, N, D], first [T, N] -> logits [T, N, A], value [T, N], memory after step T.
+        Without LSTM the steps are independent and state stays None.
+        """
+        steps, n = obs.shape[:2]
+        flat = obs.reshape(steps * n, -1)
+        if self.meta['shared']:
+            actor_features = critic_features = self.body(flat)
+        else:
+            actor_features, critic_features = self.actor_body(flat), self.critic_body(flat)
+        if self.recurrent:
+            if first is None:
+                first = torch.zeros(steps, n, dtype=torch.bool)
+            h, c = state
+            inputs = actor_features.reshape(steps, n, -1)
+            outputs = []
+            for t in range(steps):
+                # Zero the memory of games whose observation t starts a new game.
+                keep = (~first[t]).float().view(1, n, 1)
+                out, (h, c) = self.lstm(inputs[t:t + 1], (h * keep, c * keep))
+                outputs.append(out)
+            actor_features = critic_features = torch.cat(outputs).reshape(steps * n, -1)
+            state = (h, c)
+        return (self.actor(actor_features).reshape(steps, n, -1),
+                self.critic(critic_features).reshape(steps, n), state)
+
+    def step(self, obs, state=None, first=None):
+        """One step of N games: obs [N, D] -> logits [N, A], value [N], new memory."""
+        logits, value, state = self.sequence(obs[None], state, None if first is None else first[None])
+        return logits[0], value[0], state
 
     def forward(self, obs):
-        """Return (logits[B, n_actions], value[B])."""
-        if self.meta['shared']:
-            actor_features = critic_features = self.body(obs)
-        else:
-            actor_features, critic_features = self.actor_body(obs), self.critic_body(obs)
-        return self.actor(actor_features), self.critic(critic_features).squeeze(-1)
-
-    def value(self, obs):
-        return self(obs)[1]
+        """Memoryless policy only: obs [B, D] -> logits [B, A], value [B]."""
+        if self.recurrent:
+            raise RuntimeError('A model with memory needs step() or sequence() and a memory state')
+        logits, value, _ = self.step(obs)
+        return logits, value
 
 
 def save_model(model, path):
@@ -117,35 +173,63 @@ def compute_gae(rewards, values, ends, next_value, gamma, lam):
     return advantages, advantages + values
 
 
-def ppo_update(model, optimizer, batch, c, rng):
-    """Several epochs of clipped-objective minibatch updates on one rollout."""
-    obs, actions, old_logp, advantages, returns, old_values = batch
-    size = len(actions)
-    minibatch = size // c['num_minibatches']
+def _minibatches(model, rollout, c, rng):
+    """Yield (logits, values, pick) for each minibatch of one epoch.
+
+    pick(x) selects the entries of a [T, N] rollout tensor that belong to the
+    minibatch, in the same order as logits and values. Without memory a
+    minibatch is any set of transitions. With memory it is a set of whole games
+    columns, replayed in order from the memory saved before the rollout.
+    """
+    obs = rollout['obs']
+    steps, n = rollout['actions'].shape
+    if model.recurrent:
+        per = n // c['num_minibatches']
+        order = rng.permutation(n)
+        for start in range(0, n, per):
+            columns = torch.from_numpy(order[start:start + per])
+            state = tuple(s[:, columns] for s in rollout['state'])
+            logits, values, _ = model.sequence(obs[:, columns], state, rollout['first'][:, columns])
+            yield logits.reshape(-1, logits.shape[-1]), values.reshape(-1), \
+                lambda x, columns=columns: x[:, columns].reshape(-1)
+    else:
+        size = steps * n
+        per = size // c['num_minibatches']
+        flat_obs = obs.reshape(size, -1)
+        order = rng.permutation(size)
+        for start in range(0, size, per):
+            index = torch.from_numpy(order[start:start + per])
+            logits, values = model(flat_obs[index])
+            yield logits, values, lambda x, index=index: x.reshape(-1)[index]
+
+
+def ppo_update(model, optimizer, rollout, c, rng):
+    """Several epochs of clipped-objective minibatch updates on one rollout.
+
+    rollout: dict of [T, N] tensors (obs is [T, N, D]): obs, actions, logp,
+    advantages, returns, values, first; plus 'state', the memory before step 0.
+    """
     stats = defaultdict(list)
     for _ in range(c['update_epochs']):
-        order = rng.permutation(size)
-        for start in range(0, size, minibatch):
-            index = torch.from_numpy(order[start:start + minibatch])
-            logits, value = model(obs[index])
+        for logits, value, pick in _minibatches(model, rollout, c, rng):
             dist = Categorical(logits=logits)
-            logp = dist.log_prob(actions[index])
-            log_ratio = logp - old_logp[index]
+            logp = dist.log_prob(pick(rollout['actions']))
+            log_ratio = logp - pick(rollout['logp'])
             ratio = log_ratio.exp()
             with torch.no_grad():
                 stats['approx_kl'].append(((ratio - 1) - log_ratio).mean().item())
                 stats['clipfrac'].append(((ratio - 1).abs() > c['clip_coef']).float().mean().item())
 
-            adv = advantages[index]
+            adv = pick(rollout['advantages'])
             if c['norm_adv']:
                 adv = (adv - adv.mean()) / (adv.std() + 1e-8)
             # Pessimistic (larger) of the two losses: no gain for moving ratio beyond 1 +/- clip.
             policy_loss = torch.max(-adv * ratio,
                                     -adv * ratio.clamp(1 - c['clip_coef'], 1 + c['clip_coef'])).mean()
 
-            target = returns[index]
+            target, old_values = pick(rollout['returns']), pick(rollout['values'])
             if c['clip_vloss']:
-                clipped = old_values[index] + (value - old_values[index]).clamp(-c['clip_coef'], c['clip_coef'])
+                clipped = old_values + (value - old_values).clamp(-c['clip_coef'], c['clip_coef'])
                 value_loss = 0.5 * torch.max((value - target) ** 2, (clipped - target) ** 2).mean()
             else:
                 value_loss = 0.5 * ((value - target) ** 2).mean()
@@ -164,9 +248,10 @@ def ppo_update(model, optimizer, batch, c, rng):
         if c['target_kl'] is not None and np.mean(stats['approx_kl'][-c['num_minibatches']:]) > c['target_kl']:
             break
     result = {k: float(np.mean(v)) for k, v in stats.items()}
+    returns, values = rollout['returns'], rollout['values']
     variance = returns.var().item()
     result['explained_variance'] = (float('nan') if variance == 0
-                                    else 1 - (returns - old_values).var().item() / variance)
+                                    else 1 - (returns - values).var().item() / variance)
     return result
 
 
@@ -174,6 +259,8 @@ def make_envs(c):
     if c['env'] == 'wod':
         levels = [level for _ in range(c['envs_per_level']) for level in c['levels']]
         return VectorEnv(levels, seed=c['seed'], visit_bonus=c['visit_bonus'], bonus_cap=c['bonus_cap'])
+    if c['env'] == 'memory':
+        return MemoryCue(c['num_envs'], seed=c['seed'], delay=c['delay'])
     return GymVector(c['env'], c['num_envs'], seed=c['seed'])
 
 
@@ -185,6 +272,8 @@ def check_config(c):
         raise ValueError('Use at least one level and one game per level')
     if not (0 <= c['gamma'] <= 1 and 0 <= c['gae_lambda'] <= 1 and c['clip_coef'] > 0 and c['learning_rate'] > 0):
         raise ValueError('Invalid gamma, gae_lambda, clip_coef or learning_rate')
+    if c.get('lstm', 0) < 0:
+        raise ValueError('lstm must be 0 (off) or the number of LSTM units')
 
 
 def progress(window):
@@ -205,16 +294,18 @@ def main():
     p.add_argument('--seed', type=int)
     p.add_argument('--levels', nargs='+', help='Override levels (MiniHack only)')
     p.add_argument('--envs-per-level', type=int)
+    p.add_argument('--lstm', type=int, help='LSTM units (0 = no memory)')
     a = p.parse_args()
     c = json.loads(a.config.read_text())
-    for key, value in (('steps', a.steps), ('seed', a.seed), ('levels', a.levels), ('envs_per_level', a.envs_per_level)):
+    c.setdefault('lstm', 0)
+    for key, value in (('steps', a.steps), ('seed', a.seed), ('levels', a.levels),
+                       ('envs_per_level', a.envs_per_level), ('lstm', a.lstm)):
         if value is not None:
             c[key] = value
     try:
         check_config(c)
     except ValueError as error:
         p.error(str(error))
-    a.out.mkdir(parents=True, exist_ok=False)
 
     torch.set_num_threads(1)
     torch.manual_seed(c['seed'])
@@ -222,40 +313,47 @@ def main():
     envs = make_envs(c)
     n, steps = envs.num_envs, c['num_steps']
     batch_size = n * steps
-    if batch_size % c['num_minibatches']:
-        p.error('num_envs * num_steps must be divisible by num_minibatches')
+    units = n if c['lstm'] else batch_size  # with memory, minibatches are made of whole games
+    if units % c['num_minibatches']:
+        envs.close()
+        p.error(f"num_minibatches must divide {'the number of games' if c['lstm'] else 'num_envs * num_steps'}")
+    a.out.mkdir(parents=True, exist_ok=False)  # never overwrite earlier evidence
     iterations = max(1, c['steps'] // batch_size)
     c.update(num_envs=n, batch_size=batch_size, iterations=iterations)
     (a.out / 'config.json').write_text(json.dumps(c, indent=2) + '\n')
 
-    model = ActorCritic(envs.obs_dim, envs.n_actions, c['hidden'], c['activation'], c['shared'])
+    model = ActorCritic(envs.obs_dim, envs.n_actions, c['hidden'], c['activation'], c['shared'], c['lstm'])
     optimizer = torch.optim.Adam(model.parameters(), lr=c['learning_rate'], eps=1e-5)
-    buf_obs = torch.zeros(steps, n, envs.obs_dim)
-    buf_actions = torch.zeros(steps, n, dtype=torch.long)
-    buf_logp, buf_rewards, buf_values = (torch.zeros(steps, n) for _ in range(3))
-    buf_ends = torch.zeros(steps, n, dtype=torch.bool)
+    rollout = dict(obs=torch.zeros(steps, n, envs.obs_dim), actions=torch.zeros(steps, n, dtype=torch.long),
+                   logp=torch.zeros(steps, n), rewards=torch.zeros(steps, n), values=torch.zeros(steps, n),
+                   ends=torch.zeros(steps, n, dtype=torch.bool), first=torch.zeros(steps, n, dtype=torch.bool))
 
     window = defaultdict(lambda: deque(maxlen=100))
     global_step, status, started = 0, 'failed', time.monotonic()
     try:
         obs = torch.as_tensor(envs.reset())
+        state = model.initial_state(n)
+        first = torch.ones(n, dtype=torch.bool)
         with (a.out / 'episodes.jsonl').open('w', buffering=1) as episodes, \
                 (a.out / 'metrics.jsonl').open('w', buffering=1) as metrics:
             for iteration in range(1, iterations + 1):
                 if c['anneal_lr']:
                     optimizer.param_groups[0]['lr'] = c['learning_rate'] * (1 - (iteration - 1) / iterations)
+                # The update replays every game of this rollout from this memory.
+                rollout['state'] = None if state is None else tuple(s.clone() for s in state)
 
                 # 1. Collect: the current policy plays num_steps in every game.
                 for t in range(steps):
                     with torch.no_grad():
-                        logits, value = model(obs)
+                        logits, value, state = model.step(obs, state, first)
                         dist = Categorical(logits=logits)
                         action = dist.sample()
-                    buf_obs[t], buf_actions[t], buf_logp[t], buf_values[t] = obs, action, dist.log_prob(action), value
+                    rollout['obs'][t], rollout['first'][t] = obs, first
+                    rollout['actions'][t], rollout['logp'][t], rollout['values'][t] = action, dist.log_prob(action), value
                     next_obs, rewards, ends, infos = envs.step(action.numpy())
                     global_step += n
-                    buf_rewards[t] = torch.from_numpy(rewards)
-                    buf_ends[t] = torch.from_numpy(ends)
+                    rollout['rewards'][t] = torch.from_numpy(rewards)
+                    rollout['ends'][t] = first = torch.from_numpy(ends)
                     for info in infos:
                         if info is not None:
                             episodes.write(json.dumps(dict(global_step=global_step, **info)) + '\n')
@@ -264,18 +362,17 @@ def main():
 
                 # 2. Advantages, bootstrapping from the critic after the last step.
                 with torch.no_grad():
-                    advantages, returns = compute_gae(buf_rewards, buf_values, buf_ends, model.value(obs),
-                                                      c['gamma'], c['gae_lambda'])
+                    next_value = model.step(obs, state, first)[1]
+                    rollout['advantages'], rollout['returns'] = compute_gae(
+                        rollout['rewards'], rollout['values'], rollout['ends'], next_value, c['gamma'], c['gae_lambda'])
 
                 # 3. Learn from this rollout, then it is discarded.
-                batch = (buf_obs.reshape(-1, envs.obs_dim), buf_actions.reshape(-1), buf_logp.reshape(-1),
-                         advantages.reshape(-1), returns.reshape(-1), buf_values.reshape(-1))
-                stats = ppo_update(model, optimizer, batch, c, rng)
+                stats = ppo_update(model, optimizer, rollout, c, rng)
 
                 seconds = time.monotonic() - started
                 row = dict(iteration=iteration, global_step=global_step, seconds=round(seconds, 1),
                            sps=round(global_step / seconds), learning_rate=optimizer.param_groups[0]['lr'],
-                           rollout_reward=float(buf_rewards.sum() / n), **stats)
+                           rollout_reward=float(rollout['rewards'].sum() / n), **stats)
                 metrics.write(json.dumps(row) + '\n')
                 if iteration % c['log_every'] == 0 or iteration == iterations:
                     print(json.dumps(dict(step=global_step, sps=row['sps'], entropy=round(stats['entropy'], 3),

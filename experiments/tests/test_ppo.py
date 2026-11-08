@@ -99,8 +99,11 @@ class ModelTests(unittest.TestCase):
             old_logp = torch.log_softmax(logits, -1).gather(1, actions[:, None]).squeeze(1)
         c = dict(num_minibatches=2, update_epochs=4, clip_coef=0.2, norm_adv=True, clip_vloss=True,
                  ent_coef=0.0, vf_coef=0.5, max_grad_norm=0.5, target_kl=None)
-        stats = ppo_update(model, optimizer, (obs, actions, old_logp, advantages, values + 1, values), c,
-                           np.random.default_rng(0))
+        column = lambda x: x[:, None]
+        rollout = dict(obs=obs[:, None], actions=column(actions), logp=column(old_logp),
+                       advantages=column(advantages), returns=column(values + 1), values=column(values),
+                       first=torch.zeros(64, 1, dtype=torch.bool), state=None)
+        stats = ppo_update(model, optimizer, rollout, c, np.random.default_rng(0))
         with torch.no_grad():
             new_logp = torch.log_softmax(model(obs)[0], -1).gather(1, actions[:, None]).squeeze(1)
         change = new_logp - old_logp
@@ -108,6 +111,61 @@ class ModelTests(unittest.TestCase):
         self.assertLess(change[1::2].mean().item(), 0)
         for key in ('approx_kl', 'clipfrac', 'entropy', 'policy_loss', 'value_loss', 'explained_variance'):
             self.assertIn(key, stats)
+
+
+class MemoryTests(unittest.TestCase):
+    def setUp(self):
+        torch.manual_seed(0)
+        self.model = ActorCritic(5, 3, hidden=(8,), lstm=6)
+
+    def test_memory_is_zeroed_at_the_start_of_a_game(self):
+        obs = torch.randn(7, 2, 5)
+        first = torch.zeros(7, 2, dtype=torch.bool)
+        first[4, 0] = True  # game 0 restarts at step 4; game 1 continues
+        state = tuple(torch.randn(1, 2, 6) for _ in range(2))
+        logits, values, _ = self.model.sequence(obs, state, first)
+        fresh_logits, fresh_values, _ = self.model.sequence(obs[4:, :1], self.model.initial_state(1))
+        torch.testing.assert_close(logits[4:, :1], fresh_logits)
+        torch.testing.assert_close(values[4:, :1], fresh_values)
+        # Without the restart the earlier steps would still influence step 4.
+        no_reset, _, _ = self.model.sequence(obs, state, torch.zeros(7, 2, dtype=torch.bool))
+        self.assertFalse(torch.allclose(no_reset[4, 0], logits[4, 0]))
+        torch.testing.assert_close(no_reset[:, 1], logits[:, 1])
+
+    def test_replayed_rollout_gives_the_probabilities_seen_while_playing(self):
+        steps, n = 9, 3
+        obs = torch.randn(steps, n, 5)
+        first = torch.rand(steps, n) < 0.2
+        start = tuple(torch.randn(1, n, 6) for _ in range(2))
+        state, played = start, []
+        with torch.no_grad():
+            for t in range(steps):
+                logits, _, state = self.model.step(obs[t], state, first[t])
+                played.append(logits)
+            replayed, _, final = self.model.sequence(obs, start, first)
+        torch.testing.assert_close(torch.stack(played), replayed)
+        torch.testing.assert_close(final[0], state[0])
+        # A minibatch of some games, as in the update, matches too.
+        columns = torch.tensor([2, 0])
+        part, _, _ = self.model.sequence(obs[:, columns], tuple(s[:, columns] for s in start), first[:, columns])
+        torch.testing.assert_close(part, replayed[:, columns])
+
+    def test_agent_memory_resets_between_games_and_survives_checkpoint(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / 'policy.npz'
+            save_model(self.model, path)
+            agent = load_agent(path)
+        obs = [torch.randn(5).numpy() for _ in range(4)]
+        first_game = [agent.act(o) for o in obs]
+        agent.reset()
+        self.assertEqual([agent.act(o) for o in obs], first_game)
+        with torch.no_grad():
+            logits, _, _ = self.model.sequence(torch.tensor(np.stack(obs))[:, None], self.model.initial_state(1))
+        self.assertEqual(first_game, logits[:, 0].argmax(-1).tolist())
+
+    def test_memoryless_forward_refuses_a_recurrent_model(self):
+        with self.assertRaises(RuntimeError):
+            self.model(torch.randn(2, 5))
 
 
 class TrainingSmokeTests(unittest.TestCase):
@@ -126,6 +184,10 @@ class TrainingSmokeTests(unittest.TestCase):
         self.assertEqual(summary['status'], 'finished')
         self.assertEqual(summary['steps'], 2048)
         self.assertEqual(len(metrics), 4)
+
+    def test_memory_task_short_run_with_lstm(self):
+        summary, metrics = self.run_training('configs/ppo-memory.json', '--steps', '512', '--lstm', '8')
+        self.assertEqual((summary['status'], summary['steps'], len(metrics)), ('finished', 512, 2))
 
     def test_wod_short_run(self):
         summary, metrics = self.run_training('configs/ppo.json', '--steps', '1024')
