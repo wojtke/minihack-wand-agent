@@ -7,13 +7,16 @@ All extra rewards default to 0 and never enter native_return or evaluation:
   wand enters the inventory and -wand_bonus if it leaves. On Easy the wand is
   there from the start, so it adds nothing; per game it adds at most +wand_bonus.
 - death_penalty: -death_penalty when the game ends in death. Natively death
-  gives 0 while every wasted action costs -0.01, so dying early beats surviving
-  to the action limit; this removes that incentive.
+  gives 0 while every action that takes no game time costs -0.01, so dying
+  early can beat surviving to the action limit; this removes that incentive.
 - align_bonus: potential-based shaping F = gamma * Phi(next) - Phi(now) with
   Phi = align_bonus if the player holds a wand and a visible monster is on the
   same row, column or diagonal (a straight line a wand ray can travel), else 0.
   Phi is 0 after the game ends, so the shaping sums to at most -Phi(start) over
   a game and cannot be farmed by stepping in and out of line.
+
+on_item=True adds one observation input: 1 when a remembered object lies under
+the player (its glyph is hidden by the player's), e.g. standing on the wand.
 
 macro=True replaces the native inputs z and f by eight "zap the wand in
 direction d" actions (17 in all: kljhunby, pick up, zap kljhunby). Each one
@@ -22,7 +25,7 @@ does not appear or the game ends. Every native input still counts against the
 action limit and its time penalty, so evaluation is on the same native game.
 """
 import numpy as np
-from .features import DIM, MONSTER, PublicMemory
+from .features import MONSTER, PublicMemory
 from .native import HORIZONS, KEYS, make_env, text
 from .terminal import FinalObservation
 
@@ -32,7 +35,7 @@ MACRO_NAMES = tuple(DIRECTIONS + ',') + tuple('z' + d for d in DIRECTIONS)
 
 class AgentEnv:
     def __init__(self, level, visit_bonus=0.0, bonus_cap=2.0, wand_bonus=0.0, death_penalty=0.0,
-                 align_bonus=0.0, gamma=0.99, macro=False):
+                 align_bonus=0.0, gamma=0.99, macro=False, on_item=False):
         if min(visit_bonus, bonus_cap, wand_bonus, death_penalty, align_bonus) < 0:
             raise ValueError('Bonuses and penalties must be nonnegative')
         if not 0 <= gamma <= 1:
@@ -40,6 +43,8 @@ class AgentEnv:
         self.level, self.visit_bonus, self.bonus_cap = level, visit_bonus, bonus_cap
         self.wand_bonus, self.death_penalty = wand_bonus, death_penalty
         self.align_bonus, self.gamma, self.macro = align_bonus, gamma, macro
+        self.on_item = on_item
+        self.obs_dim = PublicMemory(on_item).dim
         self.native = FinalObservation(make_env(level))
         assert ''.join(chr(int(a)) for a in self.native.unwrapped.actions) == KEYS
         assert self.native.unwrapped._max_episode_steps == HORIZONS[level]
@@ -51,7 +56,7 @@ class AgentEnv:
 
     def reset(self, seed):
         self.raw, _ = self.native.reset(seed=seed)
-        self.memory = PublicMemory()
+        self.memory = PublicMemory(self.on_item)
         self.elapsed = 0
         self.total = self.bonus_total = self.shaping_total = 0.0
         self.has_wand = has_wand(self.raw)
@@ -67,11 +72,10 @@ class AgentEnv:
         if not self.active:
             raise RuntimeError('Reset before stepping a completed game')
         action = int(action)
-        if not self.macro:
-            return self._native_step(action)
-        name = MACRO_NAMES[action]
-        if len(name) == 1:
-            return self._native_step(KEYS.index(name))
+        name = MACRO_NAMES[action] if self.macro else KEYS[action]
+        return self._macro_step(name) if len(name) == 2 else self._native_step(KEYS.index(name))
+
+    def _macro_step(self, name):
         # Zap macro: z, then the wand (always inventory letter f), then the direction,
         # each only if the game asks for it.
         total = 0.0
@@ -116,11 +120,11 @@ class AgentEnv:
         self.shaping_total += shaping
         self.active = not done
         # Native action limits define a finite task. Ended episodes never bootstrap.
-        obs = np.zeros(DIM, np.float32) if done else self.memory.encode(self.raw, self.elapsed)
+        obs = np.zeros(self.obs_dim, np.float32) if done else self.memory.encode(self.raw, self.elapsed)
+        success = info['end_status'].name == 'TASK_SUCCESSFUL'
         metrics = dict(level=self.level, steps=self.elapsed, native_reward=float(reward),
                        native_return=self.total, bonus=self.bonus_total, shaping=self.shaping_total,
-                       success=info['end_status'].name == 'TASK_SUCCESSFUL',
-                       end_status=info['end_status'].name)
+                       success=success, end_status=info['end_status'].name)
         return obs, float(reward) + bonus + shaping, done, metrics
 
     def close(self):

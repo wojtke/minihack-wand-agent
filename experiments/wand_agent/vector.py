@@ -16,7 +16,7 @@ import signal
 import numpy as np
 
 from .env import MACRO_NAMES, AgentEnv
-from .features import DIM
+from .features import DIM, ON_ITEM_DIM
 from .native import KEYS, LEVELS
 
 TRAIN_SEED_LIMIT = 100_000_000
@@ -75,7 +75,7 @@ class VectorEnv:
 
     def __init__(self, levels=LEVELS * 2, seed=0, visit_bonus=0.0, bonus_cap=2.0,
                  processes=True, workers=None, **options):
-        """options: further AgentEnv settings (wand_bonus, death_penalty, align_bonus, gamma, macro)."""
+        """options: further AgentEnv settings (wand_bonus, death_penalty, align_bonus, gamma, macro, on_item)."""
         self.levels = tuple(levels)
         unknown = set(self.levels) - set(LEVELS)
         if unknown:
@@ -84,6 +84,7 @@ class VectorEnv:
         options = dict(visit_bonus=visit_bonus, bonus_cap=bonus_cap, **options)
         args = [(level, s, options) for level, s in zip(self.levels, seeds)]
         self.n_actions = len(MACRO_NAMES) if options.get('macro') else len(KEYS)
+        self.obs_dim = ON_ITEM_DIM if options.get('on_item') else DIM
         self.processes = processes
         self.closed = False
         if processes:
@@ -105,7 +106,6 @@ class VectorEnv:
         else:
             self.games = [Game(*a) for a in args]
 
-    obs_dim = DIM
 
     @property
     def num_envs(self):

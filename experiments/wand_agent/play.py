@@ -17,7 +17,7 @@ def main():
     if not 0 <= a.seed < 2**31 or a.delay < 0: p.error('Invalid seed or delay')
     torch.set_num_threads(1)
     agent = load_agent(a.model, seed=a.seed)
-    env = AgentEnv(a.level, macro=agent.macro)
+    env = AgentEnv(a.level, macro=agent.macro, on_item=agent.on_item)
     names = MACRO_NAMES if agent.macro else KEYS
     try:
         agent.reset()

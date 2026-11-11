@@ -348,7 +348,8 @@ def make_envs(c):
     if c['env'] == 'wod':
         return VectorEnv(c['games'], seed=c['seed'], visit_bonus=c['visit_bonus'], bonus_cap=c['bonus_cap'],
                          wand_bonus=c['wand_bonus'], death_penalty=c['death_penalty'],
-                         align_bonus=c['align_bonus'], gamma=c['gamma'], macro=c['macro'])
+                         align_bonus=c['align_bonus'], gamma=c['gamma'], macro=c['macro'],
+                         on_item=c['on_item'])
     if c['env'] == 'memory':
         return MemoryCue(c['num_envs'], seed=c['seed'], delay=c['delay'])
     return GymVector(c['env'], c['num_envs'], seed=c['seed'])
@@ -382,7 +383,7 @@ def progress(window):
     return out
 
 
-DEFAULTS = dict(lstm=0, wand_bonus=0.0, death_penalty=0.0, align_bonus=0.0, macro=False,
+DEFAULTS = dict(lstm=0, wand_bonus=0.0, death_penalty=0.0, align_bonus=0.0, macro=False, on_item=False,
                 rnd=False, rnd_ext_coef=2.0, rnd_int_coef=1.0, rnd_gamma=0.99,
                 rnd_update_proportion=0.25, rnd_hidden=256, rnd_output=64,
                 sil=False, sil_coef=1.0, sil_value_coef=0.01, sil_updates=4, sil_batch=512, sil_capacity=50000)
@@ -405,6 +406,11 @@ def main():
     p.add_argument('--macro', action=argparse.BooleanOptionalAction, help='Zap macro-actions instead of z and f')
     p.add_argument('--sil', action=argparse.BooleanOptionalAction, help='Self-imitation of won games on or off')
     p.add_argument('--ent-coef', type=float, help='Entropy bonus coefficient')
+    p.add_argument('--clip-vloss', action=argparse.BooleanOptionalAction, help='Clip the value loss as in PPO')
+    p.add_argument('--visit-bonus', type=float, help='Training reward per newly visited square')
+    p.add_argument('--bonus-cap', type=float, help='Most visit bonus per game')
+    p.add_argument('--on-item', action=argparse.BooleanOptionalAction,
+                   help='Extra input: 1 when an object lies under the player')
     p.add_argument('--init-from', type=Path, help='Start from the weights of a PPO checkpoint with the same network '
                    '(curriculum); the optimizer and the RND networks start fresh')
     a = p.parse_args()
@@ -413,7 +419,10 @@ def main():
         c['games'] = [level for _ in range(a.envs_per_level) for level in a.levels]
     for key, value in (('steps', a.steps), ('seed', a.seed), ('games', a.games), ('lstm', a.lstm), ('rnd', a.rnd),
                        ('wand_bonus', a.wand_bonus), ('death_penalty', a.death_penalty),
-                       ('align_bonus', a.align_bonus), ('macro', a.macro), ('sil', a.sil), ('ent_coef', a.ent_coef)):
+                       ('align_bonus', a.align_bonus), ('macro', a.macro), ('sil', a.sil), ('ent_coef', a.ent_coef),
+                       ('clip_vloss', a.clip_vloss),
+                       ('visit_bonus', a.visit_bonus), ('bonus_cap', a.bonus_cap),
+                       ('on_item', a.on_item)):
         if value is not None:
             c[key] = value
     if a.init_from:

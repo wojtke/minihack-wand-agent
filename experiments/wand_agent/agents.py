@@ -13,12 +13,14 @@ import numpy as np
 import torch
 
 from .env import MACRO_NAMES
+from .features import ON_ITEM_DIM
 from .native import KEYS
 from .network import load as load_q_network
 
 
 class Agent(Protocol):
     macro: bool  # True: act() indexes env.MACRO_NAMES instead of KEYS
+    on_item: bool  # True: observations carry the extra "object under the player" input
 
     def reset(self) -> None: ...
 
@@ -27,7 +29,7 @@ class Agent(Protocol):
 
 class RandomAgent:
     """Uniform over the 11 inputs: the baseline every method must beat."""
-    macro = False
+    macro = on_item = False
 
     def __init__(self, seed=0):
         self.rng = np.random.default_rng(seed)
@@ -41,7 +43,7 @@ class RandomAgent:
 
 class QAgent:
     """Greedy policy of a Double DQN checkpoint (no exploration)."""
-    macro = False
+    macro = on_item = False
 
     def __init__(self, network):
         self.network = network
@@ -63,6 +65,7 @@ class PPOAgent:
         self.model, self.sample = model, sample
         # A policy with 17 outputs was trained on zap macro-actions (env.MACRO_NAMES).
         self.macro = model.meta['n_actions'] == len(MACRO_NAMES)
+        self.on_item = model.meta['obs_dim'] == ON_ITEM_DIM
         self.generator = torch.Generator().manual_seed(seed)
         self.reset()
 

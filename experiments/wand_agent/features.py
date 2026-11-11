@@ -6,15 +6,18 @@ from .native import KEYS, text
 MONSTER = nethack.glyph_is_monster(np.arange(nethack.MAX_GLYPH + 1))
 OBJECT = nethack.glyph_is_object(np.arange(nethack.MAX_GLYPH + 1))
 DIM = 463
+ON_ITEM_DIM = DIM + 1  # with on_item=True: one more input, 1 when an object lies under the player
 
 
 class PublicMemory:
     """Generic visible entity/terrain memory; no action choice or path search."""
-    def __init__(self):
+    def __init__(self, on_item=False):
+        self.on_item = on_item
+        self.dim = ON_ITEM_DIM if on_item else DIM
         self.visits = np.zeros((21, 79), dtype=np.int32)
         self.objects = set()
         self.exits = set()
-        self.previous_items = set()
+        self.previous_items = None  # unknown before the first observation
         self.previous_action = None
         self.previous_mode = None
         self.command = None
@@ -34,9 +37,12 @@ class PublicMemory:
         monsters[y, x] = False
         # A visible object is remembered when the player stands over its glyph.
         self.objects.update((int(xx), int(yy)) for yy, xx in zip(*np.where(objects)))
+        if self.on_item and text(raw['message']).startswith('You see here'):
+            self.objects.add((x, y))  # also an object never seen before the player stepped on it
         self.exits.update((int(xx),int(yy)) for yy,xx in zip(*np.where(chars==ord('>'))))
         items = set(map(int, raw["inv_letters"][raw["inv_letters"] != 0]))
-        if items - self.previous_items:
+        # A new inventory item means the object underfoot was picked up; the starting kit is not one.
+        if self.previous_items is not None and items - self.previous_items:
             self.objects.discard((x, y))
         self.previous_items = items
         self.objects = {(xx, yy) for xx, yy in self.objects
@@ -70,5 +76,7 @@ class PublicMemory:
         if self.previous_mode is not None:old_mode[self.previous_mode]=1.
         encoded = np.concatenate([local, enemy, item_positions, inventory, modes, previous, other,
                                   relative(self.exits,2),old_mode])
-        assert encoded.shape == (DIM,) and np.isfinite(encoded).all()
+        if self.on_item:
+            encoded = np.append(encoded, np.float32((x, y) in self.objects))
+        assert encoded.shape == (self.dim,) and np.isfinite(encoded).all()
         return encoded

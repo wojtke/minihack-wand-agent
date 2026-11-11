@@ -144,6 +144,23 @@ class ShapingTests(unittest.TestCase):
         self.assertAlmostEqual(metrics['shaping'], 2 * (0.99 * 0.5 - 0.5) - 0.5)
 
 
+class OnItemTests(unittest.TestCase):
+    def test_on_item_input_marks_the_square_with_the_wand(self):
+        # Medium seed 0: the wand lies one square east of the start.
+        env = AgentEnv('Medium', macro=True, on_item=True)
+        flags = [env.reset(0)[-1]] + [env.step(MACRO_NAMES.index(name))[0][-1] for name in ('l', ',', 'l')]
+        env.close()
+        self.assertEqual(flags, [0.0, 1.0, 0.0, 0.0])  # start, on the wand, picked up, moved on
+
+    def test_on_item_is_off_by_default_and_vector_env_reports_its_size(self):
+        env = AgentEnv('Medium')
+        self.assertEqual(env.reset(0).shape, (DIM,))
+        env.close()
+        with VectorEnv(['Medium'], processes=False, on_item=True) as vector:
+            self.assertEqual(vector.reset().shape, (1, DIM + 1))
+            self.assertEqual(vector.obs_dim, DIM + 1)
+
+
 class MacroTests(unittest.TestCase):
     def test_zap_macro_plays_z_f_direction_as_native_inputs(self):
         native = AgentEnv('Easy')
