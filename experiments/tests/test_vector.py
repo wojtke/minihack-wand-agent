@@ -74,6 +74,26 @@ class VectorTests(unittest.TestCase):
         finally:
             single.close()
 
+    def test_level_weights_choose_the_level_of_next_games_reproducibly(self):
+        # 'f' never moves, so every Easy game ends at its action limit; after that only Pro is drawn.
+        runs = []
+        for processes in (False, True):
+            with VectorEnv(('Easy',) * 3, seed=5, processes=processes, workers=2) as env:
+                out = [env.reset()]
+                env.set_level_weights([0, 0, 0, 1])
+                for _ in range(HORIZONS['Easy'] + 5):
+                    obs, rewards, dones, infos = env.step([KEYS.index('f')] * 3)
+                    out.append((obs, rewards, dones, [i and (i['level'], i['seed'], i['steps']) for i in infos]))
+                for game in ([] if processes else env.games):
+                    self.assertEqual((game.level, game.env.level), ('Pro', 'Pro'))
+                runs.append(out)
+        assert_same(self, *runs)
+        finished = [info for row in runs[0][1:] for info in row[3] if info]
+        self.assertEqual([level for level, _, _ in finished], ['Easy'] * 3)  # the Pro games are still running
+        with VectorEnv(('Easy',), processes=False) as env:
+            with self.assertRaises(ValueError):
+                env.set_level_weights([0.5, 0.5, 0.5, 0])
+
     def test_rejects_wrong_input(self):
         with self.assertRaises(ValueError):
             VectorEnv(('Impossible',), processes=False)

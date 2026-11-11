@@ -29,6 +29,7 @@ from torch import nn
 from torch.distributions import Categorical
 
 from .rnd import RND
+from .native import LEVELS
 from .toy import MemoryCue
 from .vector import GymVector, VectorEnv
 
@@ -371,6 +372,33 @@ def check_config(c):
         raise ValueError('Self-imitation (sil) is implemented without memory only (lstm 0)')
     if c['macro'] and c['env'] != 'wod':
         raise ValueError('Macro-actions exist only for MiniHack (env wod)')
+    if c['adaptive_levels'] and (c['env'] != 'wod' or not 0 <= c['min_level_share'] * len(set(c['games'])) <= 1):
+        raise ValueError('adaptive_levels needs MiniHack (env wod) and min_level_share * levels in [0, 1]')
+
+
+def level_mix(window, levels, min_share):
+    """Adaptive level mix: (target share of training steps, probability of the next game) per LEVELS.
+
+    Each level in levels gets at least min_share of the steps; the rest is split in
+    proportion to its recent loss rate (1 - win rate over the games in window), so
+    levels the agent already solves get little more than min_share. Games differ in
+    length (an Easy win takes a few steps, a Pro game hundreds), so the probability
+    of the next game is the step share divided by the level's mean game length.
+    """
+    recent = {level: window.get(level) for level in levels}
+    losses = np.array([1 - np.mean([g['success'] for g in games]) if games else 1.0
+                       for games in recent.values()])
+    if losses.sum() == 0:
+        losses = np.ones(len(levels))
+    shares = min_share + (1 - len(levels) * min_share) * losses / losses.sum()
+    known = [np.mean([g['steps'] for g in games]) for games in recent.values() if games]
+    default = np.mean(known) if known else 1.0
+    lengths = np.array([np.mean([g['steps'] for g in games]) if games else default for games in recent.values()])
+    target, games = np.zeros(len(LEVELS)), np.zeros(len(LEVELS))
+    index = [LEVELS.index(level) for level in levels]
+    target[index] = shares
+    games[index] = shares / lengths
+    return target, games / games.sum()
 
 
 def progress(window):
@@ -384,6 +412,7 @@ def progress(window):
 
 
 DEFAULTS = dict(lstm=0, wand_bonus=0.0, death_penalty=0.0, align_bonus=0.0, macro=False, on_item=False,
+                adaptive_levels=False, min_level_share=0.05,
                 rnd=False, rnd_ext_coef=2.0, rnd_int_coef=1.0, rnd_gamma=0.99,
                 rnd_update_proportion=0.25, rnd_hidden=256, rnd_output=64,
                 sil=False, sil_coef=1.0, sil_value_coef=0.01, sil_updates=4, sil_batch=512, sil_capacity=50000)
@@ -411,6 +440,10 @@ def main():
     p.add_argument('--bonus-cap', type=float, help='Most visit bonus per game')
     p.add_argument('--on-item', action=argparse.BooleanOptionalAction,
                    help='Extra input: 1 when an object lies under the player')
+    p.add_argument('--adaptive-levels', action=argparse.BooleanOptionalAction,
+                   help='Choose the level of each next game by recent win rate (levels of --games/--levels only)')
+    p.add_argument('--min-level-share', type=float,
+                   help='With --adaptive-levels: least share of training steps per level (default 0.05)')
     p.add_argument('--init-from', type=Path, help='Start from the weights of a PPO checkpoint with the same network '
                    '(curriculum); the optimizer and the RND networks start fresh')
     a = p.parse_args()
@@ -422,7 +455,8 @@ def main():
                        ('align_bonus', a.align_bonus), ('macro', a.macro), ('sil', a.sil), ('ent_coef', a.ent_coef),
                        ('clip_vloss', a.clip_vloss),
                        ('visit_bonus', a.visit_bonus), ('bonus_cap', a.bonus_cap),
-                       ('on_item', a.on_item)):
+                       ('on_item', a.on_item), ('adaptive_levels', a.adaptive_levels),
+                       ('min_level_share', a.min_level_share)):
         if value is not None:
             c[key] = value
     if a.init_from:
@@ -464,6 +498,7 @@ def main():
                    ends=torch.zeros(steps, n, dtype=torch.bool), first=torch.zeros(steps, n, dtype=torch.bool))
 
     window = defaultdict(lambda: deque(maxlen=100))
+    mix_levels = [level for level in LEVELS if level in c['games']] if c['adaptive_levels'] else None
     global_step, status, started = 0, 'failed', time.monotonic()
     try:
         obs = torch.as_tensor(envs.reset())
@@ -499,6 +534,11 @@ def main():
 
                 # 2. Advantages, bootstrapping from the critic after the last step.
                 extra = {}
+                if mix_levels:
+                    target, chance = level_mix(window, mix_levels, c['min_level_share'])
+                    envs.set_level_weights(chance)
+                    extra.update(level_share={l: round(float(x), 3) for l, x in zip(LEVELS, target) if l in mix_levels},
+                                 level_chance={l: round(float(x), 3) for l, x in zip(LEVELS, chance) if l in mix_levels})
                 with torch.no_grad():
                     next_values = model.step(obs, state, first)[1]
                     advantages, returns = compute_gae(rollout['rewards'], rollout['values'][..., 0], rollout['ends'],
@@ -512,7 +552,7 @@ def main():
                             next_values[:, 1], c['rnd_gamma'], c['gae_lambda'])
                         advantages = c['rnd_ext_coef'] * advantages + c['rnd_int_coef'] * int_advantages
                         returns = torch.stack([returns, int_returns], -1)
-                        extra = dict(bonus_mean=float(bonus.mean()), bonus_raw_mean=float(raw.mean()),
+                        extra.update(bonus_mean=float(bonus.mean()), bonus_raw_mean=float(raw.mean()),
                                      bonus_by_game=[round(float(x), 4) for x in bonus.mean(0)])
                     else:
                         returns = returns[..., None]
@@ -534,6 +574,8 @@ def main():
                                  explained_variance=round(stats['explained_variance'], 3))
                     if rnd is not None:
                         shown['bonus_raw'] = round(extra['bonus_raw_mean'], 4)
+                    if mix_levels:
+                        shown['level_share'] = extra['level_share']
                     print(json.dumps(dict(**shown, recent=progress(window))), flush=True)
                 if global_step // c['save_every'] != (global_step - batch_size) // c['save_every']:
                     save_model(model, a.out / f'step-{global_step:09d}.npz')

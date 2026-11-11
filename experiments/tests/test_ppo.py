@@ -11,8 +11,8 @@ import torch
 from wand_agent.agents import PPOAgent, load_agent
 from wand_agent.features import DIM
 from wand_agent.native import KEYS
-from wand_agent.ppo import (ActorCritic, SelfImitation, compute_gae, load_model, ppo_update, save_model,
-                            sil_update)
+from wand_agent.ppo import (ActorCritic, SelfImitation, compute_gae, level_mix, load_model, ppo_update,
+                            save_model, sil_update)
 from wand_agent.rnd import RND, RunningMeanStd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -248,6 +248,23 @@ class RndTests(unittest.TestCase):
         self.assertEqual(model(obs[None])[1].shape, (1, 2))
 
 
+class LevelMixTests(unittest.TestCase):
+    def test_shares_follow_loss_rate_with_a_minimum_and_chances_correct_for_game_length(self):
+        games = lambda wins, n, steps: [dict(success=i < wins, steps=steps) for i in range(n)]
+        window = dict(Easy=games(10, 10, 3), Medium=games(10, 10, 10), Hard=games(5, 10, 50), Pro=games(0, 10, 300))
+        target, chance = level_mix(window, ['Easy', 'Medium', 'Hard', 'Pro'], 0.05)
+        # Losses 0, 0, 0.5, 1: the 0.8 left after the minimum goes 1/3 to Hard and 2/3 to Pro.
+        np.testing.assert_allclose(target, [0.05, 0.05, 0.05 + 0.8 / 3, 0.05 + 1.6 / 3])
+        per_step = target / np.array([3, 10, 50, 300])
+        np.testing.assert_allclose(chance, per_step / per_step.sum())
+
+    def test_levels_outside_the_mix_get_nothing_and_unplayed_levels_count_as_lost(self):
+        window = dict(Medium=[dict(success=True, steps=10)])
+        target, chance = level_mix(window, ['Medium', 'Pro'], 0.1)
+        np.testing.assert_allclose(target, [0, 0.1, 0, 0.9])
+        np.testing.assert_allclose(chance, [0, 0.1, 0, 0.9])  # unknown length: the mean of known ones
+
+
 class TrainingSmokeTests(unittest.TestCase):
     def run_training(self, config, *extra):
         with tempfile.TemporaryDirectory() as d:
@@ -282,6 +299,14 @@ class TrainingSmokeTests(unittest.TestCase):
             self.assertGreater(row['bonus_raw_mean'], 0)
             self.assertEqual(len(row['bonus_by_game']), 7)
             self.assertTrue(np.isfinite(row['rnd_loss']))
+
+    def test_wod_short_run_with_adaptive_levels(self):
+        summary, metrics = self.run_training('configs/ppo.json', '--steps', '1792', '--adaptive-levels', '--sil')
+        self.assertEqual((summary['status'], summary['steps'], len(metrics)), ('finished', 1792, 2))
+        for row in metrics:
+            self.assertAlmostEqual(sum(row['level_share'].values()), 1)
+            self.assertGreaterEqual(min(row['level_share'].values()), 0.05 - 1e-9)
+            self.assertAlmostEqual(sum(row['level_chance'].values()), 1)
 
     def test_init_from_checkpoint_starts_from_its_weights_and_refuses_other_networks(self):
         with tempfile.TemporaryDirectory() as d:

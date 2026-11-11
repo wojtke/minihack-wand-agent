@@ -9,6 +9,10 @@ and `done` marks the boundary. The finished game's metrics come back in `infos`.
 Each game draws its episode seeds from its own generator, derived from one
 master seed, so a run is fully reproducible. Training seeds lie in
 [0, TRAIN_SEED_LIMIT); evaluate.py uses seeds from 100000000 upwards.
+
+By default every game slot always plays its own level. After
+set_level_weights(p), each slot draws the level of its next game from p
+instead (adaptive level mix); the first game of each slot keeps its level.
 """
 import multiprocessing as mp
 import signal
@@ -23,14 +27,35 @@ TRAIN_SEED_LIMIT = 100_000_000
 
 
 class Game:
-    """One AgentEnv with its own seed generator and automatic reset."""
+    """One game slot with its own seed generator and automatic reset.
+
+    It keeps one AgentEnv per level it has played, so it can switch levels
+    between games when level weights are set.
+    """
 
     def __init__(self, level, seed_sequence, options=None):
-        self.env = AgentEnv(level, **(options or {}))
+        self.options = options or {}
+        self.envs = {}
+        self.level = level
+        self.env = self._env(level)
         self.rng = np.random.default_rng(seed_sequence)
+        # Separate stream: without level weights the episode seeds stay the same as before.
+        self.level_rng = np.random.default_rng(seed_sequence.spawn(1)[0])
+        self.weights = None
         self.seed = None
 
+    def _env(self, level):
+        if level not in self.envs:
+            self.envs[level] = AgentEnv(level, **self.options)
+        return self.envs[level]
+
+    def set_weights(self, weights):
+        self.weights = weights
+
     def reset(self):
+        if self.weights is not None:
+            self.level = LEVELS[self.level_rng.choice(len(LEVELS), p=self.weights)]
+            self.env = self._env(self.level)
         self.seed = int(self.rng.integers(0, TRAIN_SEED_LIMIT))
         return self.env.reset(self.seed)
 
@@ -43,7 +68,8 @@ class Game:
         return obs, reward, done, info
 
     def close(self):
-        self.env.close()
+        for env in self.envs.values():
+            env.close()
 
 
 def _worker(pipe, args):
@@ -56,6 +82,9 @@ def _worker(pipe, args):
                 pipe.send([game.step(action) for game, action in zip(games, data)])
             elif command == 'reset':
                 pipe.send([game.reset() for game in games])
+            elif command == 'weights':
+                for game in games:
+                    game.set_weights(data)
             elif command == 'close':
                 break
     finally:
@@ -66,6 +95,9 @@ def _worker(pipe, args):
 
 class VectorEnv:
     """Batched interface: reset() -> obs[N, DIM]; step(actions[N]) -> obs, rewards, dones, infos.
+
+    levels gives each game slot its level (and the number of slots); infos
+    report the level each finished game was actually played on.
 
     Games are split evenly across `workers` processes (default: one per game, at
     most 8). Each message carries the whole group, so several games per process
@@ -110,6 +142,19 @@ class VectorEnv:
     @property
     def num_envs(self):
         return len(self.levels)
+
+    def set_level_weights(self, weights):
+        """From now on, every game slot draws the level of its next game from weights (one per LEVELS)."""
+        weights = np.asarray(weights, np.float64)
+        if weights.shape != (len(LEVELS),) or (weights < 0).any() or not np.isclose(weights.sum(), 1):
+            raise ValueError(f'Expected {len(LEVELS)} nonnegative weights that sum to 1, got {weights}')
+        weights = weights / weights.sum()
+        if self.processes:
+            for pipe in self.pipes:
+                pipe.send(('weights', weights))
+        else:
+            for game in self.games:
+                game.set_weights(weights)
 
     def reset(self):
         if self.processes:
