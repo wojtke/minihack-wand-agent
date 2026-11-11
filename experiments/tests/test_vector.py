@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from wand_agent.agents import QAgent, RandomAgent, load_agent
-from wand_agent.env import AgentEnv
+from wand_agent.env import MACRO_NAMES, AgentEnv
 from wand_agent.features import DIM
 from wand_agent.native import HORIZONS, KEYS, LEVELS
 from wand_agent.vector import TRAIN_SEED_LIMIT, VectorEnv
@@ -98,3 +98,79 @@ class AgentInterfaceTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class ShapingTests(unittest.TestCase):
+    def play(self, level, seed, keys=None, agent=None, **shaping):
+        env = AgentEnv(level, **shaping)
+        obs, rewards, metrics = env.reset(seed), [], None
+        if agent is not None:
+            agent.reset()
+        for step in range(HORIZONS[level]):
+            action = KEYS.index(keys[step]) if keys else agent.act(obs)
+            obs, reward, done, metrics = env.step(action)
+            rewards.append(reward)
+            if done:
+                break
+        env.close()
+        return rewards, metrics
+
+    def test_death_penalty_applies_only_to_death_and_never_to_native_return(self):
+        # Zapping up on Easy bounces the ray back: death.
+        rewards, metrics = self.play('Easy', 0, 'zfk', death_penalty=1.0, wand_bonus=0.5)
+        self.assertEqual(metrics['end_status'], 'DEATH')
+        self.assertAlmostEqual(rewards[-1], metrics['native_reward'] - 1.0)
+        self.assertAlmostEqual(metrics['shaping'], -1.0)  # wand held from the start: no wand bonus on Easy
+        rewards, metrics = self.play('Easy', 0, 'zfl', death_penalty=1.0, wand_bonus=0.5)
+        self.assertTrue(metrics['success'])
+        self.assertEqual((metrics['shaping'], sum(rewards)), (0.0, metrics['native_return']))
+
+    def test_wand_bonus_paid_once_when_the_wand_is_picked_up(self):
+        agent = load_agent('checkpoints/shared-best.npz')
+        rewards, metrics = self.play('Medium', 210000000, agent=agent, wand_bonus=0.5)
+        self.assertTrue(metrics['success'])
+        self.assertAlmostEqual(metrics['shaping'], 0.5)
+        self.assertEqual(sum(1 for r in rewards if r >= 0.4), 2)  # pick-up step and the win
+        self.assertAlmostEqual(sum(rewards), metrics['native_return'] + 0.5)
+
+    def test_align_potential_telescopes_to_minus_its_start_value(self):
+        # Easy seed 0: the wand is held and the minotaur is in line to the east, so Phi(start) = 0.5;
+        # with gamma = 1 the shaping of a whole game sums to Phi(end) - Phi(start) = 0 - 0.5.
+        rewards, metrics = self.play('Easy', 0, 'zfl', align_bonus=0.5, gamma=1.0)
+        self.assertTrue(metrics['success'])
+        self.assertAlmostEqual(metrics['shaping'], -0.5)
+        self.assertAlmostEqual(sum(rewards), metrics['native_return'] - 0.5)
+        rewards, metrics = self.play('Easy', 0, 'zfl', align_bonus=0.5, gamma=0.99)
+        self.assertAlmostEqual(metrics['shaping'], 2 * (0.99 * 0.5 - 0.5) - 0.5)
+
+
+class MacroTests(unittest.TestCase):
+    def test_zap_macro_plays_z_f_direction_as_native_inputs(self):
+        native = AgentEnv('Easy')
+        native.reset(0)
+        for key in 'zfl':
+            _, _, done, expected = native.step(KEYS.index(key))
+        native.close()
+        env = AgentEnv('Easy', macro=True)
+        env.reset(0)
+        _, reward, done, metrics = env.step(MACRO_NAMES.index('zl'))
+        env.close()
+        self.assertTrue(done)
+        self.assertEqual(metrics, expected)
+        self.assertEqual(metrics['steps'], 3)  # every native input counts against the action limit
+        self.assertAlmostEqual(reward, metrics['native_return'])
+
+    def test_zap_macro_without_a_wand_stops_after_z(self):
+        env = AgentEnv('Medium', macro=True)
+        env.reset(0)
+        _, _, done, metrics = env.step(MACRO_NAMES.index('zl'))
+        env.close()
+        self.assertFalse(done)
+        self.assertEqual(metrics['steps'], 1)
+
+    def test_vector_env_reports_macro_action_count(self):
+        with VectorEnv(['Easy'], processes=False, macro=True) as env:
+            self.assertEqual(env.n_actions, 17)
+            env.reset()
+            env.step([MACRO_NAMES.index('zl')])
+            self.assertEqual(env.games[0].env.elapsed, 3)  # z, f and the direction

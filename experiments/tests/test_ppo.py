@@ -11,7 +11,8 @@ import torch
 from wand_agent.agents import PPOAgent, load_agent
 from wand_agent.features import DIM
 from wand_agent.native import KEYS
-from wand_agent.ppo import ActorCritic, compute_gae, load_model, ppo_update, save_model
+from wand_agent.ppo import (ActorCritic, SelfImitation, compute_gae, load_model, ppo_update, save_model,
+                            sil_update)
 from wand_agent.rnd import RND, RunningMeanStd
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +113,38 @@ class ModelTests(unittest.TestCase):
         self.assertLess(change[1::2].mean().item(), 0)
         for key in ('approx_kl', 'clipfrac', 'entropy', 'policy_loss', 'value_loss', 'explained_variance'):
             self.assertIn(key, stats)
+
+
+
+class SelfImitationTests(unittest.TestCase):
+    def test_stores_only_won_games_with_discounted_returns_and_balances_levels(self):
+        sil = SelfImitation(num_envs=2, gamma=0.5, capacity=100)
+        obs = torch.zeros(2, 3)
+        won, lost = dict(level='Medium', success=True), dict(level='Hard', success=False)
+        sil.record(obs, [0, 1], [0.0, 0.0], [False, False], [None, None])
+        sil.record(obs, [2, 1], [1.0, 0.0], [True, True], [won, lost])
+        self.assertEqual((sil.games, sil.wins, list(sil.levels)), (1, 1, ['Medium']))
+        _, actions, returns = sil.levels['Medium']['games'][0]
+        np.testing.assert_allclose(returns, [0.5, 1.0])  # 0 + 0.5 * 1, then 1
+        np.testing.assert_array_equal(actions, [0, 2])
+        for _ in range(50):  # many short Easy wins
+            sil.record(obs, [3, 3], [1.0, 1.0], [True, True], [dict(level='Easy', success=True)] * 2)
+        _, actions, _ = sil.sample(100, np.random.default_rng(0))
+        self.assertEqual(int((actions != 3).sum()), 50)  # half the batch still comes from Medium
+
+    def test_update_raises_probability_of_won_actions_above_the_critic(self):
+        torch.manual_seed(0)
+        model = ActorCritic(4, 3, hidden=(16,))
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.01, eps=1e-5)
+        sil = SelfImitation(num_envs=1, gamma=0.99, capacity=1000)
+        obs = torch.randn(1, 4)
+        sil.record(obs, [2], [1.0], [True], [dict(level='Medium', success=True)])
+        before = torch.log_softmax(model(obs)[0], -1)[0, 2].item()
+        c = dict(sil_updates=20, sil_batch=8, sil_coef=1.0, sil_value_coef=0.01, max_grad_norm=0.5)
+        stats = sil_update(model, optimizer, sil, c, np.random.default_rng(0))
+        after = torch.log_softmax(model(obs)[0], -1)[0, 2].item()
+        self.assertGreater(after, before + 0.5)
+        self.assertEqual((stats['sil_games'], stats['sil_wins']), (1, 1))
 
 
 class MemoryTests(unittest.TestCase):
@@ -249,6 +282,27 @@ class TrainingSmokeTests(unittest.TestCase):
             self.assertGreater(row['bonus_raw_mean'], 0)
             self.assertEqual(len(row['bonus_by_game']), 7)
             self.assertTrue(np.isfinite(row['rnd_loss']))
+
+    def test_init_from_checkpoint_starts_from_its_weights_and_refuses_other_networks(self):
+        with tempfile.TemporaryDirectory() as d:
+            def train(out, *extra):
+                return subprocess.run([sys.executable, '-m', 'wand_agent.ppo', '--config', 'configs/ppo-cartpole.json',
+                                       '--steps', '512', '--out', str(Path(d) / out), *extra],
+                                      cwd=ROOT, capture_output=True, text=True)
+            self.assertEqual(train('first').returncode, 0)
+            start = Path(d) / 'first' / 'latest.npz'
+            self.assertEqual(train('second', '--init-from', str(start)).returncode, 0)
+            config = json.loads((Path(d) / 'second' / 'config.json').read_text())
+            self.assertEqual(config['init_from']['path'], str(start))
+            # One update moves the weights a little, but far less than a fresh random start would differ.
+            first, second = load_model(start), load_model(Path(d) / 'second' / 'latest.npz')
+            fresh = ActorCritic(**first.meta)
+            moved = sum((a - b).abs().sum() for a, b in zip(first.parameters(), second.parameters()))
+            random = sum((a - b).abs().sum() for a, b in zip(first.parameters(), fresh.parameters()))
+            self.assertLess(moved, 0.2 * random)
+            refused = train('third', '--init-from', str(start), '--lstm', '8')
+            self.assertEqual(refused.returncode, 2)
+            self.assertIn('differs', refused.stderr)
 
 
 if __name__ == '__main__':

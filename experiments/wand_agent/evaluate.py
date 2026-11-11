@@ -26,7 +26,7 @@ def wilson(wins, games):
 
 def play_games(agent, level, seeds):
     """Play one game per seed with native reward only; return per-game metrics."""
-    env = AgentEnv(level)
+    env = AgentEnv(level, macro=agent.macro)
     rows = []
     try:
         for seed in seeds:

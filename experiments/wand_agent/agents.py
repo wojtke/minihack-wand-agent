@@ -3,6 +3,7 @@
 evaluate.py and play.py only use this interface:
     agent.reset()      before each game (clears memory, e.g. an LSTM state)
     agent.act(obs)     -> index into KEYS for one 463-feature observation
+                          (into env.MACRO_NAMES when agent.macro is True)
 Training code may use batched methods of its own; this is the playing side.
 """
 from pathlib import Path
@@ -11,11 +12,14 @@ from typing import Protocol
 import numpy as np
 import torch
 
+from .env import MACRO_NAMES
 from .native import KEYS
 from .network import load as load_q_network
 
 
 class Agent(Protocol):
+    macro: bool  # True: act() indexes env.MACRO_NAMES instead of KEYS
+
     def reset(self) -> None: ...
 
     def act(self, obs: np.ndarray) -> int: ...
@@ -23,6 +27,7 @@ class Agent(Protocol):
 
 class RandomAgent:
     """Uniform over the 11 inputs: the baseline every method must beat."""
+    macro = False
 
     def __init__(self, seed=0):
         self.rng = np.random.default_rng(seed)
@@ -36,6 +41,7 @@ class RandomAgent:
 
 class QAgent:
     """Greedy policy of a Double DQN checkpoint (no exploration)."""
+    macro = False
 
     def __init__(self, network):
         self.network = network
@@ -55,6 +61,8 @@ class PPOAgent:
 
     def __init__(self, model, sample=False, seed=0):
         self.model, self.sample = model, sample
+        # A policy with 17 outputs was trained on zap macro-actions (env.MACRO_NAMES).
+        self.macro = model.meta['n_actions'] == len(MACRO_NAMES)
         self.generator = torch.Generator().manual_seed(seed)
         self.reset()
 

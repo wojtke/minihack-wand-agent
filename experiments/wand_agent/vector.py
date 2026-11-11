@@ -15,7 +15,7 @@ import signal
 
 import numpy as np
 
-from .env import AgentEnv
+from .env import MACRO_NAMES, AgentEnv
 from .features import DIM
 from .native import KEYS, LEVELS
 
@@ -25,8 +25,8 @@ TRAIN_SEED_LIMIT = 100_000_000
 class Game:
     """One AgentEnv with its own seed generator and automatic reset."""
 
-    def __init__(self, level, seed_sequence, visit_bonus=0.0, bonus_cap=2.0):
-        self.env = AgentEnv(level, visit_bonus, bonus_cap)
+    def __init__(self, level, seed_sequence, options=None):
+        self.env = AgentEnv(level, **(options or {}))
         self.rng = np.random.default_rng(seed_sequence)
         self.seed = None
 
@@ -74,13 +74,16 @@ class VectorEnv:
     """
 
     def __init__(self, levels=LEVELS * 2, seed=0, visit_bonus=0.0, bonus_cap=2.0,
-                 processes=True, workers=None):
+                 processes=True, workers=None, **options):
+        """options: further AgentEnv settings (wand_bonus, death_penalty, align_bonus, gamma, macro)."""
         self.levels = tuple(levels)
         unknown = set(self.levels) - set(LEVELS)
         if unknown:
             raise ValueError(f'Unknown levels: {sorted(unknown)}')
         seeds = np.random.SeedSequence(seed).spawn(len(self.levels))
-        args = [(level, s, visit_bonus, bonus_cap) for level, s in zip(self.levels, seeds)]
+        options = dict(visit_bonus=visit_bonus, bonus_cap=bonus_cap, **options)
+        args = [(level, s, options) for level, s in zip(self.levels, seeds)]
+        self.n_actions = len(MACRO_NAMES) if options.get('macro') else len(KEYS)
         self.processes = processes
         self.closed = False
         if processes:
@@ -103,7 +106,6 @@ class VectorEnv:
             self.games = [Game(*a) for a in args]
 
     obs_dim = DIM
-    n_actions = len(KEYS)
 
     @property
     def num_envs(self):

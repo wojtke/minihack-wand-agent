@@ -1,5 +1,5 @@
 """PPO (clipped objective, GAE) for one policy on all four levels, optionally with
-memory (LSTM) and a curiosity bonus (RND).
+memory (LSTM), a curiosity bonus (RND) and self-imitation of won games (SIL).
 
 Structure follows CleanRL's ppo.py, ppo_atari_lstm.py and ppo_rnd_envpool.py
 (MIT licence, https://github.com/vwxyzjn/cleanrl): collect num_steps from every
@@ -16,6 +16,7 @@ Conventions used throughout:
            (second head for the curiosity bonus).
 """
 import argparse
+import hashlib
 import json
 import math
 import time
@@ -266,9 +267,88 @@ def ppo_update(model, optimizer, rollout, c, rng, rnd=None):
     return result
 
 
+class SelfImitation:
+    """Self-Imitation Learning (Oh et al., 2018) on won games only.
+
+    Every finished game whose info says success is stored with its discounted
+    training returns R(t). After each PPO update the policy is pushed towards
+    the stored actions where R(t) exceeds the critic's estimate V(s(t)):
+        loss = -log pi(a|s) * max(R - V, 0) + value_coef * 0.5 * max(R - V, 0)^2
+    so a rare win is learned from many times instead of once. Each level keeps
+    its own buffer of at most `capacity` transitions (oldest games dropped) and
+    gets an equal share of every batch, so thousands of short Easy wins cannot
+    crowd out a few Medium ones. Without memory (MLP) only.
+    """
+
+    def __init__(self, num_envs, gamma, capacity):
+        self.gamma, self.capacity = gamma, capacity
+        self.current = [[] for _ in range(num_envs)]
+        self.levels = {}  # level -> dict(games=deque, size=int, flat=joined arrays or None)
+        self.wins = 0
+
+    def record(self, obs, actions, rewards, ends, infos):
+        for i in range(len(self.current)):
+            self.current[i].append((obs[i].numpy(), int(actions[i]), float(rewards[i])))
+            if ends[i]:
+                if infos[i] is not None and infos[i].get('success'):
+                    self._add(infos[i].get('level'), self.current[i])
+                self.current[i] = []
+
+    def _add(self, level, game):
+        returns, following = np.zeros(len(game), np.float32), 0.0
+        for t in reversed(range(len(game))):
+            following = game[t][2] + self.gamma * following
+            returns[t] = following
+        buffer = self.levels.setdefault(level, dict(games=deque(), size=0, flat=None))
+        buffer['games'].append((np.stack([g[0] for g in game]), np.array([g[1] for g in game]), returns))
+        buffer['size'] += len(game)
+        buffer['flat'] = None
+        self.wins += 1
+        while buffer['size'] > self.capacity and len(buffer['games']) > 1:
+            buffer['size'] -= len(buffer['games'].popleft()[0])
+
+    @property
+    def games(self):
+        return sum(len(b['games']) for b in self.levels.values())
+
+    def sample(self, batch, rng):
+        parts = []
+        for buffer, share in zip(self.levels.values(), np.array_split(np.arange(batch), len(self.levels))):
+            if buffer['flat'] is None:  # joined again only after this level's buffer changed
+                buffer['flat'] = tuple(np.concatenate([g[k] for g in buffer['games']]) for k in range(3))
+            index = rng.integers(0, len(buffer['flat'][0]), len(share))
+            parts.append([x[index] for x in buffer['flat']])
+        return tuple(torch.from_numpy(np.concatenate(x)) for x in zip(*parts))
+
+
+def sil_update(model, optimizer, sil, c, rng):
+    stats = defaultdict(list)
+    if not sil.levels:
+        return {}
+    for _ in range(c['sil_updates']):
+        obs, actions, returns = sil.sample(c['sil_batch'], rng)
+        logits, values = model(obs)
+        gap = (returns - values[:, 0]).clamp_min(0)
+        logp = Categorical(logits=logits).log_prob(actions)
+        policy_loss = -(logp * gap.detach()).mean()
+        value_loss = 0.5 * (gap ** 2).mean()
+        loss = c['sil_coef'] * (policy_loss + c['sil_value_coef'] * value_loss)
+        optimizer.zero_grad()
+        loss.backward()
+        nn.utils.clip_grad_norm_([p for g in optimizer.param_groups for p in g['params']], c['max_grad_norm'])
+        optimizer.step()
+        stats['sil_policy_loss'].append(policy_loss.item())
+        stats['sil_positive'].append((gap > 0).float().mean().item())
+    result = {k: float(np.mean(v)) for k, v in stats.items()}
+    result.update(sil_games=sil.games, sil_wins=sil.wins)
+    return result
+
+
 def make_envs(c):
     if c['env'] == 'wod':
-        return VectorEnv(c['games'], seed=c['seed'], visit_bonus=c['visit_bonus'], bonus_cap=c['bonus_cap'])
+        return VectorEnv(c['games'], seed=c['seed'], visit_bonus=c['visit_bonus'], bonus_cap=c['bonus_cap'],
+                         wand_bonus=c['wand_bonus'], death_penalty=c['death_penalty'],
+                         align_bonus=c['align_bonus'], gamma=c['gamma'], macro=c['macro'])
     if c['env'] == 'memory':
         return MemoryCue(c['num_envs'], seed=c['seed'], delay=c['delay'])
     return GymVector(c['env'], c['num_envs'], seed=c['seed'])
@@ -286,6 +366,10 @@ def check_config(c):
         raise ValueError('lstm must be 0 (off) or the number of LSTM units')
     if c['rnd'] and not 0 < c['rnd_update_proportion'] <= 1:
         raise ValueError('rnd_update_proportion must be in (0, 1]')
+    if c['sil'] and c['lstm']:
+        raise ValueError('Self-imitation (sil) is implemented without memory only (lstm 0)')
+    if c['macro'] and c['env'] != 'wod':
+        raise ValueError('Macro-actions exist only for MiniHack (env wod)')
 
 
 def progress(window):
@@ -298,8 +382,10 @@ def progress(window):
     return out
 
 
-DEFAULTS = dict(lstm=0, rnd=False, rnd_ext_coef=2.0, rnd_int_coef=1.0, rnd_gamma=0.99,
-                rnd_update_proportion=0.25, rnd_hidden=256, rnd_output=64)
+DEFAULTS = dict(lstm=0, wand_bonus=0.0, death_penalty=0.0, align_bonus=0.0, macro=False,
+                rnd=False, rnd_ext_coef=2.0, rnd_int_coef=1.0, rnd_gamma=0.99,
+                rnd_update_proportion=0.25, rnd_hidden=256, rnd_output=64,
+                sil=False, sil_coef=1.0, sil_value_coef=0.01, sil_updates=4, sil_batch=512, sil_capacity=50000)
 
 
 def main():
@@ -313,13 +399,25 @@ def main():
     p.add_argument('--envs-per-level', type=int, default=1)
     p.add_argument('--lstm', type=int, help='LSTM units (0 = no memory)')
     p.add_argument('--rnd', action=argparse.BooleanOptionalAction, help='Curiosity bonus (RND) on or off')
+    p.add_argument('--wand-bonus', type=float, help='Training reward for picking up a wand (shaping)')
+    p.add_argument('--death-penalty', type=float, help='Training penalty for dying')
+    p.add_argument('--align-bonus', type=float, help='Potential for holding a wand in line with a monster (shaping)')
+    p.add_argument('--macro', action=argparse.BooleanOptionalAction, help='Zap macro-actions instead of z and f')
+    p.add_argument('--sil', action=argparse.BooleanOptionalAction, help='Self-imitation of won games on or off')
+    p.add_argument('--ent-coef', type=float, help='Entropy bonus coefficient')
+    p.add_argument('--init-from', type=Path, help='Start from the weights of a PPO checkpoint with the same network '
+                   '(curriculum); the optimizer and the RND networks start fresh')
     a = p.parse_args()
     c = {**DEFAULTS, **json.loads(a.config.read_text())}
     if a.levels:
         c['games'] = [level for _ in range(a.envs_per_level) for level in a.levels]
-    for key, value in (('steps', a.steps), ('seed', a.seed), ('games', a.games), ('lstm', a.lstm), ('rnd', a.rnd)):
+    for key, value in (('steps', a.steps), ('seed', a.seed), ('games', a.games), ('lstm', a.lstm), ('rnd', a.rnd),
+                       ('wand_bonus', a.wand_bonus), ('death_penalty', a.death_penalty),
+                       ('align_bonus', a.align_bonus), ('macro', a.macro), ('sil', a.sil), ('ent_coef', a.ent_coef)):
         if value is not None:
             c[key] = value
+    if a.init_from:
+        c['init_from'] = dict(path=str(a.init_from), sha256=hashlib.sha256(a.init_from.read_bytes()).hexdigest())
     try:
         check_config(c)
     except ValueError as error:
@@ -338,12 +436,19 @@ def main():
 
     heads = 2 if c['rnd'] else 1
     model = ActorCritic(envs.obs_dim, envs.n_actions, c['hidden'], c['activation'], c['shared'], c['lstm'], heads)
+    if a.init_from:
+        start = load_model(a.init_from)
+        if start.meta != model.meta:
+            p.error(f'--init-from network {start.meta} differs from this run {model.meta}')
+        model.load_state_dict(start.state_dict())
+        model.train()
     parameters = list(model.parameters())
     rnd = None
     if c['rnd']:
         rnd = RND(envs.obs_dim, c['rnd_hidden'], c['rnd_output'], c['rnd_gamma'], c['rnd_update_proportion'])
         parameters += list(rnd.predictor.parameters())
     optimizer = torch.optim.Adam(parameters, lr=c['learning_rate'], eps=1e-5)
+    sil = SelfImitation(n, c['gamma'], c['sil_capacity']) if c['sil'] else None
     rollout = dict(obs=torch.zeros(steps, n, envs.obs_dim), next_obs=torch.zeros(steps, n, envs.obs_dim),
                    actions=torch.zeros(steps, n, dtype=torch.long), logp=torch.zeros(steps, n),
                    rewards=torch.zeros(steps, n), values=torch.zeros(steps, n, heads),
@@ -375,6 +480,8 @@ def main():
                     global_step += n
                     rollout['rewards'][t] = torch.from_numpy(rewards)
                     rollout['ends'][t] = first = torch.from_numpy(ends)
+                    if sil is not None:
+                        sil.record(obs, action, rewards, ends, infos)
                     for info in infos:
                         if info is not None:
                             episodes.write(json.dumps(dict(global_step=global_step, **info)) + '\n')
@@ -404,6 +511,8 @@ def main():
 
                 # 3. Learn from this rollout, then it is discarded.
                 stats = ppo_update(model, optimizer, rollout, c, rng, rnd)
+                if sil is not None:
+                    stats.update(sil_update(model, optimizer, sil, c, rng))
 
                 seconds = time.monotonic() - started
                 row = dict(iteration=iteration, global_step=global_step, seconds=round(seconds, 1),
