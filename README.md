@@ -63,6 +63,22 @@ The policy sees **463 features** from public observations: a local crop, visible
 
 Use a separate run directory per method/config/seed and retain the git revision used. Each run saves resolved `config.json`, completed `episodes.jsonl` (seeds, native returns and bonuses), `summary.json` and weights every 50,000 actions/on exit. Progress is printed to stdout; redirect it if you need a console log. Outputs are gitignored and existing run directories are refused. **Weights-only checkpoints cannot resume optimizer/replay state.** Replay uses about 400 MB, plus PyTorch/environments. Training seeds are below 100,000,000; evaluation defaults to 100,000,000 onward. Keep validation and final-test ranges separate and compare multiple training seeds. These are fixed terrains: different seeds do not establish transfer to new maps.
 
+## Watch games and training runs
+
+Three commands write self-contained HTML pages in the style of the website (no server, no network; open the file in a browser). Run from `experiments/`:
+
+```sh
+python -m wand_agent.replay --model runs/ppo/latest.npz --level Pro --seed 100000003 --out runs/viz/pro.html
+python -m wand_agent.replay --model runs/ppo/step-*.npz runs/ppo/latest.npz --level Hard --seed 100000006 --out runs/viz/hard-steps.html
+python -m wand_agent.inspect_games --model runs/ppo/latest.npz --level Pro --games 100 --out runs/viz/pro-games.html
+python -m wand_agent.training_report runs/ppo-s1 runs/ppo-s2 runs/ppo-s3 --out runs/viz/train.html
+```
+
+- **`replay`** plays one game and shows it step by step: the map in MiniHack tiles (or ASCII) with the recent path or a visit heatmap, the chosen action and the full action distribution, critic values (both heads with `--rnd`), policy entropy, game messages and marks for "wand seen", "wand picked up", "minotaur seen" and "zap while holding the wand". Several `--model` paths play the same seed and the page switches between them, e.g. checkpoints from one run. Greedy games are the games `evaluate` plays for that seed. With `--sample`, the generator is seeded by the game seed, so a sampled game is repeatable on its own but differs from `evaluate --sample`, which shares one generator across a level. `--json` also saves the recorded game. DQN checkpoints show Q-values; `random` works too.
+- **`inspect_games`** plays `--games` evaluation seeds in `--workers` processes (default 2) and reports the event funnel, how games ended, the stage where each lost game stopped, and a coverage map over all games: share of games that visited each square, where the wand was first seen and where games ended. A few lost games from different stages (`--examples`) are embedded with the step-by-step viewer; the table gives a `replay` command for the others. The coverage map is most useful on Hard and Pro, whose layout is fixed.
+- **`on_item`**: a PPO checkpoint trained with the extra "object under the player" input (464 inputs) is recognised from the checkpoint, and `replay` and `inspect_games` feed it that input; `--on-item` forces it. The viewer then also shows when that input was 1.
+- **`training_report`** reads `episodes.jsonl` and `metrics.jsonl`. It plots win rate and ending (win, death, action limit) over the last `--window` training games per level, mean game length, and PPO statistics (entropy, explained variance, KL, clip fraction, value loss, RND bonus, SIL). Runs whose names differ only in a final `-sN` are grouped as seeds (mean and min–max range). The table shows the configuration settings that differ between runs, the step at which each level first reached a threshold, and evaluation wins from a sibling `<run>-eval.json`. Training games use the sampled policy and training seeds, so these rates are not evaluation results.
+
 ## Included checkpoint
 
 [shared-best.npz](experiments/checkpoints/shared-best.npz) contains six NumPy arrays, loaded without pickle. It comes from **3,670,016 actions in an earlier multi-stage training procedure** with modified rewards, replay and exploration. **This starter does not reproduce that lineage; its default training configuration has only been smoke-tested.** The same weights are used on every level.
